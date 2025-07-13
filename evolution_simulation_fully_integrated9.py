@@ -170,6 +170,7 @@ class Creature:
         self.threshold = random.uniform(0.2, 1.0)
         self.gestation_timer = 0
         self.gestation_duration = random.randint(60000, 120000)  # ms, 1-2 minutes per creature
+        self.infertility = random.randint(1, 100)  # 1-100, higher = more likely to fail
         # Age attributes
         self.max_age = random.randint(120000, 300000)  # ms, 2-5 minutes
         self.maturity_age = int(self.max_age * 0.25)
@@ -334,12 +335,20 @@ class Creature:
                 continue
             if math.hypot(other.x - self.x, other.y - self.y) < CREATURE_RADIUS * 2:
                 mother, father = (self, other) if self.sex == 'F' else (other, self)
+                # Infertility check
+                infertility_chance = (mother.infertility + father.infertility) / 2
+                if random.uniform(0, 100) < infertility_chance:
+                    # Mating fails
+                    return
                 for _ in range(mother.offspring_count):
                     child = mother.make_offspring(father)
                     creatures.append(child)
-                cost = mother.offspring_count * 5
+                # Cost scales with offspring count, applied to both parents
+                cost = mother.offspring_count * 10  # 10 units per offspring (adjust as needed)
                 mother.hunger = max(0, mother.hunger - cost)
                 mother.thirst = max(0, mother.thirst - cost)
+                father.hunger = max(0, father.hunger - cost)
+                father.thirst = max(0, father.thirst - cost)
                 mother.gestation_timer = pygame.time.get_ticks() + mother.gestation_duration
                 break
 
@@ -371,6 +380,7 @@ class Creature:
         child.max_age = int((self.max_age + partner.max_age) / 2 * random.uniform(0.95, 1.05))
         child.max_age = max(120000, min(300000, child.max_age))  # Clamp to 2-5 minutes
         child.maturity_age = int(child.max_age * 0.25)
+        child.infertility = max(1, min(100, int(mutate((self.infertility + partner.infertility) / 2, 0.1))))
         return child
 
     def draw(self):
@@ -460,6 +470,7 @@ def draw_stats(creatures):
     # Average total lifespan and age (in seconds)
     avg_lifespan = sum(c.max_age for c in creatures) / total / 1000
     avg_age = sum(c.age for c in creatures) / total / 1000
+    avg_infertility = sum(c.infertility for c in creatures) / total
 
     # Create stats panel
     panel = pygame.Surface((340, 260))
@@ -470,6 +481,7 @@ def draw_stats(creatures):
         f"Total Kills: {total_kills}",
         f"Avg Lifespan: {avg_lifespan:.1f}s",
         f"Avg Age: {avg_age:.1f}s",
+        f"Avg Infertility: {avg_infertility:.1f}",
         f"Avg Speed: {avg_speed:.2f}  (min: {min_speed:.2f}, max: {max_speed:.2f})",
         f"Avg Vision: {avg_vision:.1f}  (min: {min_vision}, max: {max_vision})",
         f"Avg Hunger: {avg_hunger:.1f}  (min: {min_hunger:.1f}, max: {max_hunger:.1f})",
@@ -583,7 +595,8 @@ try:
                 f"Offspring: {selected_creature.offspring_count}",
                 f"Attractiveness: {selected_creature.attractiveness:.2f}",
                 f"Aggression: {selected_creature.aggression:.2f}",
-                f"Kills: {selected_creature.kill_count}"
+                f"Kills: {selected_creature.kill_count}",
+                f"Infertility: {selected_creature.infertility}"
             ]
             if selected_creature.sex == 'F' and pygame.time.get_ticks() < selected_creature.gestation_timer:
                 lines.append("Pregnant")
