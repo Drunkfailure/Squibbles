@@ -31,8 +31,6 @@ BIG_FONT = pygame.font.SysFont(None, 36)
 
 # Setup window
 DEFAULT_WIDTH, DEFAULT_HEIGHT = 1000, 800
-pygame.display.set_caption("Evolution Simulation")
-clock = pygame.time.Clock()
 
 # Camera
 camera_offset = [0, 0]
@@ -85,14 +83,15 @@ def show_setup_menu():
         MAP_HEIGHT = 800
 
     # Reset global kill counter on new simulation
-    global global_total_kills
-    global_total_kills = 0
+    # Set global_total_kills = 0 at the module level after this function
 
 
 show_setup_menu()
 
 # Always use default window size
 screen = pygame.display.set_mode((DEFAULT_WIDTH, DEFAULT_HEIGHT))
+pygame.display.set_caption("Evolution Simulation")
+clock = pygame.time.Clock()
 
 
 # Utilities
@@ -155,18 +154,15 @@ class Creature:
         # Position - random within map bounds
         self.x = x if x is not None else random.randint(0, MAP_WIDTH)
         self.y = y if y is not None else random.randint(0, MAP_HEIGHT)
-
         # Movement and perception stats - all randomly assigned
         self.speed = random.uniform(0.5, 2.0)
         self.vision = random.randint(50, 120)
-
         # Survival stats - random starting values
         self.hunger = random.uniform(50, 100)
         self.thirst = random.uniform(50, 100)
         # Max health: random 1-100 for first gen, inherited for offspring
         self.max_health = max_health if max_health is not None else random.randint(1, 100)
         self.health = self.max_health  # Start at max health
-
         # Reproduction stats - all random
         self.offspring_count = random.randint(1, 5)
         self.sex = random.choice(['M', 'F'])
@@ -174,29 +170,50 @@ class Creature:
         self.threshold = random.uniform(0.2, 1.0)
         self.gestation_timer = 0
         self.gestation_duration = random.randint(60000, 120000)  # ms, 1-2 minutes per creature
-
+        # Age attributes
+        self.max_age = random.randint(120000, 300000)  # ms, 2-5 minutes
+        self.maturity_age = int(self.max_age * 0.25)
+        self.age = self.maturity_age  # First gen spawns at start of maturity
         # Visual appearance - random hue
         self.hue = hue if hue is not None else random.random()
         self.color = hsv_to_rgb_tuple(self.hue)
-
         # Combat stats - all randomly assigned
         self.attack = random.uniform(1, 5)
         self.defense = random.uniform(1, 5)
         self.aggression = random.uniform(0, 1)
 
     def update(self, foods, waters, creatures):
+        global global_total_kills
+        # Age update
+        self.age += clock.get_time()  # ms per frame
+        # Age scaling factor
+        if self.age < self.maturity_age:
+            age_factor = 0.75 + 0.25 * (self.age / self.maturity_age)
+        else:
+            age_factor = 1.0 - 0.5 * ((self.age - self.maturity_age) / (self.max_age - self.maturity_age))
+            age_factor = max(0.5, age_factor)
+        # Pregnant check
+        is_pregnant = self.sex == 'F' and pygame.time.get_ticks() < self.gestation_timer
         # Drain hunger and thirst
-        self.hunger -= self.speed * 0.02
-        self.thirst -= self.speed * 0.02
-
-        # Die if hunger or thirst reaches 0
-        if self.hunger <= 0 or self.thirst <= 0:
+        drain_multiplier = 1.0
+        speed_modifier = 1.0
+        if is_pregnant:
+            drain_multiplier = 1.3  # 30% faster drain when pregnant
+            speed_modifier = 1/1.5  # 1.5x slower
+        # Apply age scaling to stats
+        effective_speed = self.speed * age_factor * speed_modifier
+        effective_vision = self.vision * age_factor
+        effective_attack = self.attack * age_factor
+        effective_defense = self.defense * age_factor
+        effective_attractiveness = self.attractiveness * age_factor
+        self.hunger -= self.speed * 0.02 * drain_multiplier
+        self.thirst -= self.speed * 0.02 * drain_multiplier
+        # Die if hunger or thirst reaches 0 or age exceeds max_age
+        if self.hunger <= 0 or self.thirst <= 0 or self.age >= self.max_age:
             return False
-
-        # Find targets
-        food_target = self.find_nearest(foods)
-        water_target = self.find_nearest(waters)
-
+        # Find targets (use effective_vision)
+        food_target = self.find_nearest(foods, vision_override=effective_vision)
+        water_target = self.find_nearest(waters, vision_override=effective_vision)
         target = None
         if self.hunger < 70 or self.thirst < 70:
             if self.hunger < self.thirst and food_target:
@@ -205,65 +222,81 @@ class Creature:
                 target = water_target
             elif food_target:
                 target = food_target
-
         # Handle combat
         contested = False
         for c in creatures:
             if c is not self and target and math.hypot(c.x - target.x, c.y - target.y) < CREATURE_RADIUS * 2:
+                # Pregnant creatures always flee from combat
+                if is_pregnant:
+                    dx, dy = self.x - c.x, self.y - c.y
+                    dist = math.hypot(dx, dy)
+                    if dist > 0:
+                        self.x += (dx / dist) * effective_speed
+                        self.y += (dy / dist) * effective_speed
+                    contested = True
+                    break
+                # Child creatures are much more likely to flee and less likely to be aggressive
+                if self.age < self.maturity_age:
+                    dx, dy = self.x - c.x, self.y - c.y
+                    dist = math.hypot(dx, dy)
+                    if dist > 0:
+                        self.x += (dx / dist) * effective_speed
+                        self.y += (dy / dist) * effective_speed
+                    contested = True
+                    break
+                effective_aggression = self.aggression
+                if self.age < self.maturity_age:
+                    effective_aggression *= 0.3  # 70% less likely to be aggressive
                 if self.hunger > 10 and self.thirst > 10:
-                    if random.random() < self.aggression:
-                        damage = max(0, self.attack - c.defense)
+                    if random.random() < effective_aggression:
+                        damage = max(0, effective_attack - c.defense)
                         if damage > 0:
                             c.health -= damage
                             if c.health <= 0:
                                 self.kill_count += 1
-                                global global_total_kills
                                 global_total_kills += 1
                     else:
-                        # Defender chooses to retaliate based on aggression
                         if random.random() < c.aggression:
-                            retaliation = max(0, c.attack - self.defense)
+                            retaliation = max(0, c.attack - effective_defense)
                             if retaliation > 0:
                                 self.health -= retaliation
                                 if self.health <= 0:
                                     c.kill_count += 1
-                                    global global_total_kills
                                     global_total_kills += 1
                         contested = True
-
         # Die if health reaches 0
         if self.health <= 0:
             return False
-
         # Movement
         if target and not contested:
-            self.move_toward(target)
+            self.move_toward(target, speed_override=effective_speed)
         elif not contested:
-            self.move_random()
-
+            self.move_random(speed_override=effective_speed)
         # Keep creature within bounds
         self.x = max(0, min(MAP_WIDTH, self.x))
         self.y = max(0, min(MAP_HEIGHT, self.y))
-
         # Eat and reproduce
         self.eat(foods, waters)
-        self.reproduce(creatures)
+        self.reproduce(creatures, age_factor=age_factor)
         return True
 
-    def move_random(self):
+    def move_random(self, speed_override=None):
         angle = random.uniform(0, 2 * math.pi)
-        self.x += math.cos(angle) * self.speed
-        self.y += math.sin(angle) * self.speed
+        speed_mod = speed_override if speed_override is not None else self.speed
+        self.x += math.cos(angle) * speed_mod
+        self.y += math.sin(angle) * speed_mod
 
-    def move_toward(self, target):
+    def move_toward(self, target, speed_override=None):
         dx, dy = target.x - self.x, target.y - self.y
         dist = math.hypot(dx, dy)
         if dist > 0:
-            self.x += (dx / dist) * self.speed
-            self.y += (dy / dist) * self.speed
+            speed_mod = speed_override if speed_override is not None else self.speed
+            self.x += (dx / dist) * speed_mod
+            self.y += (dy / dist) * speed_mod
 
-    def find_nearest(self, items):
-        visible = [i for i in items if i.active and math.hypot(i.x - self.x, i.y - self.y) <= self.vision]
+    def find_nearest(self, items, vision_override=None):
+        vision = vision_override if vision_override is not None else self.vision
+        visible = [i for i in items if i.active and math.hypot(i.x - self.x, i.y - self.y) <= vision]
         return min(visible, key=lambda i: math.hypot(i.x - self.x, i.y - self.y), default=None)
 
     def eat(self, foods, waters):
@@ -280,28 +313,30 @@ class Creature:
                 water.consume()
                 break
 
-    def reproduce(self, creatures):
+    def reproduce(self, creatures, age_factor=1.0):
+        # Prevent reproduction for bottom/top 25% of age
+        age_pct = self.age / self.max_age
+        if age_pct < 0.25 or age_pct > 0.75:
+            return
         if self.sex == 'F' and pygame.time.get_ticks() < self.gestation_timer:
             return
         if self.hunger < 70 or self.thirst < 70:
             return
-
         for other in creatures:
             if other is self or {self.sex, other.sex} != {'M', 'F'}:
                 continue
             if other.hunger < 70 or other.thirst < 70:
                 continue
-            if self.attractiveness < other.threshold or other.attractiveness < self.threshold:
+            if self.attractiveness * age_factor < other.threshold or other.attractiveness * age_factor < self.threshold:
+                continue
+            other_age_pct = other.age / other.max_age
+            if other_age_pct < 0.25 or other_age_pct > 0.75:
                 continue
             if math.hypot(other.x - self.x, other.y - self.y) < CREATURE_RADIUS * 2:
                 mother, father = (self, other) if self.sex == 'F' else (other, self)
-
-                # Create offspring
                 for _ in range(mother.offspring_count):
                     child = mother.make_offspring(father)
                     creatures.append(child)
-
-                # Apply reproduction cost
                 cost = mother.offspring_count * 5
                 mother.hunger = max(0, mother.hunger - cost)
                 mother.thirst = max(0, mother.thirst - cost)
@@ -333,6 +368,9 @@ class Creature:
         child.aggression = max(0, min(1, mutate((self.aggression + partner.aggression) / 2, 0.1)))
         child.health = child.max_health  # Start at max health
         child.gestation_duration = random.randint(60000, 120000)  # Inherit random gestation duration
+        child.max_age = int((self.max_age + partner.max_age) / 2 * random.uniform(0.95, 1.05))
+        child.max_age = max(120000, min(300000, child.max_age))  # Clamp to 2-5 minutes
+        child.maturity_age = int(child.max_age * 0.25)
         return child
 
     def draw(self):
@@ -360,10 +398,24 @@ class Creature:
                              (pos[0] - bar_width // 2, pos[1] - int(10 * zoom), health_width, bar_height))
 
             # Draw pink dot if pregnant
+            dot_offset = 0
             if self.sex == 'F' and pygame.time.get_ticks() < self.gestation_timer:
-                dot_x = pos[0] + bar_width // 2 + 4
+                dot_x = pos[0] + bar_width // 2 + 4 + dot_offset
                 dot_y = pos[1] - int(10 * zoom) + bar_height // 2
                 pygame.draw.circle(screen, (255, 105, 180), (dot_x, dot_y), max(2, int(2 * zoom)))
+                dot_offset += 8  # space for next dot
+            # Draw light blue dot if child (age < 25% max_age)
+            if self.age < self.maturity_age:
+                dot_x = pos[0] + bar_width // 2 + 4 + dot_offset
+                dot_y = pos[1] - int(10 * zoom) + bar_height // 2
+                pygame.draw.circle(screen, (135, 206, 250), (dot_x, dot_y), max(2, int(2 * zoom)))
+                dot_offset += 8
+            # Draw grey dot if geriatric (age > 75% max_age)
+            if self.age > self.max_age * 0.75:
+                dot_x = pos[0] + bar_width // 2 + 4 + dot_offset
+                dot_y = pos[1] - int(10 * zoom) + bar_height // 2
+                pygame.draw.circle(screen, (180, 180, 180), (dot_x, dot_y), max(2, int(2 * zoom)))
+                dot_offset += 8
 
 
 # Simple stats display function
@@ -404,8 +456,10 @@ def draw_stats(creatures):
     min_defense = min(c.defense for c in creatures)
     max_defense = max(c.defense for c in creatures)
     # Use global_total_kills instead of recalculating
-    global global_total_kills
     total_kills = global_total_kills
+    # Average total lifespan and age (in seconds)
+    avg_lifespan = sum(c.max_age for c in creatures) / total / 1000
+    avg_age = sum(c.age for c in creatures) / total / 1000
 
     # Create stats panel
     panel = pygame.Surface((340, 260))
@@ -414,6 +468,8 @@ def draw_stats(creatures):
     stats_text = [
         f"Population: {total}",
         f"Total Kills: {total_kills}",
+        f"Avg Lifespan: {avg_lifespan:.1f}s",
+        f"Avg Age: {avg_age:.1f}s",
         f"Avg Speed: {avg_speed:.2f}  (min: {min_speed:.2f}, max: {max_speed:.2f})",
         f"Avg Vision: {avg_vision:.1f}  (min: {min_vision}, max: {max_vision})",
         f"Avg Hunger: {avg_hunger:.1f}  (min: {min_hunger:.1f}, max: {max_hunger:.1f})",
@@ -443,120 +499,144 @@ show_stats = True
 global_total_kills = 0
 
 # Main loop
-running = True
-while running:
-    screen.fill(BLACK)
+try:
+    running = True
+    while running:
+        screen.fill(BLACK)
 
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            running = False
-        elif event.type == pygame.MOUSEBUTTONDOWN:
-            if event.button == 1:  # Left click
-                mx, my = pygame.mouse.get_pos()
-                wx, wy = (mx / zoom + camera_offset[0], my / zoom + camera_offset[1])
-                found = False
-                for c in creatures:
-                    if math.hypot(c.x - wx, c.y - wy) < CREATURE_RADIUS:
-                        selected_creature = c
-                        found = True
-                        break
-                if not found:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                if event.button == 1:  # Left click
+                    mx, my = pygame.mouse.get_pos()
+                    wx, wy = (mx / zoom + camera_offset[0], my / zoom + camera_offset[1])
+                    found = False
+                    for c in creatures:
+                        if math.hypot(c.x - wx, c.y - wy) < CREATURE_RADIUS:
+                            selected_creature = c
+                            found = True
+                            break
+                    if not found:
+                        selected_creature = None
+                elif event.button == 4:  # Scroll up
+                    zoom = min(2.5, zoom + zoom_step)
+                elif event.button == 5:  # Scroll down
+                    zoom = max(0.5, zoom - zoom_step)
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
                     selected_creature = None
-            elif event.button == 4:  # Scroll up
-                zoom = min(2.5, zoom + zoom_step)
-            elif event.button == 5:  # Scroll down
-                zoom = max(0.5, zoom - zoom_step)
-        elif event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_ESCAPE:
-                selected_creature = None
-            elif event.key == pygame.K_s:
-                show_stats = not show_stats
+                elif event.key == pygame.K_s:
+                    show_stats = not show_stats
 
-    # Handle continuous key presses for camera movement
-    keys = pygame.key.get_pressed()
-    camera_speed = 5 / zoom  # Adjust speed based on zoom level
+        # Handle continuous key presses for camera movement
+        keys = pygame.key.get_pressed()
+        camera_speed = 5 / zoom  # Adjust speed based on zoom level
 
-    if keys[pygame.K_w] or keys[pygame.K_UP]:
-        camera_offset[1] = int(camera_offset[1] - camera_speed)
-    if keys[pygame.K_s] or keys[pygame.K_DOWN]:
-        camera_offset[1] = int(camera_offset[1] + camera_speed)
-    if keys[pygame.K_a] or keys[pygame.K_LEFT]:
-        camera_offset[0] = int(camera_offset[0] - camera_speed)
-    if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
-        camera_offset[0] = int(camera_offset[0] + camera_speed)
+        if keys[pygame.K_w] or keys[pygame.K_UP]:
+            camera_offset[1] = int(camera_offset[1] - camera_speed)
+        if keys[pygame.K_s] or keys[pygame.K_DOWN]:
+            camera_offset[1] = int(camera_offset[1] + camera_speed)
+        if keys[pygame.K_a] or keys[pygame.K_LEFT]:
+            camera_offset[0] = int(camera_offset[0] - camera_speed)
+        if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
+            camera_offset[0] = int(camera_offset[0] + camera_speed)
 
-    # Update camera to follow selected creature (only if not manually moving)
-    if selected_creature and selected_creature in creatures:
-        if not (keys[pygame.K_w] or keys[pygame.K_s] or keys[pygame.K_a] or keys[pygame.K_d] or
-                keys[pygame.K_UP] or keys[pygame.K_DOWN] or keys[pygame.K_LEFT] or keys[pygame.K_RIGHT]):
-            camera_offset[0] = int(selected_creature.x - screen.get_width() // 2 / zoom)
-            camera_offset[1] = int(selected_creature.y - screen.get_height() // 2 / zoom)
+        # Update camera to follow selected creature (only if not manually moving)
+        if selected_creature and selected_creature in creatures:
+            if not (keys[pygame.K_w] or keys[pygame.K_s] or keys[pygame.K_a] or keys[pygame.K_d] or
+                    keys[pygame.K_UP] or keys[pygame.K_DOWN] or keys[pygame.K_LEFT] or keys[pygame.K_RIGHT]):
+                camera_offset[0] = int(selected_creature.x - screen.get_width() // 2 / zoom)
+                camera_offset[1] = int(selected_creature.y - screen.get_height() // 2 / zoom)
 
-    # Update and draw food
-    for f in foods:
-        f.update()
-        f.draw()
+        # Update and draw food
+        for f in foods:
+            f.update()
+            f.draw()
 
-    # Update and draw water
-    for w in waters:
-        w.update()
-        w.draw()
+        # Update and draw water
+        for w in waters:
+            w.update()
+            w.draw()
 
-    # Update and draw creatures
-    for c in creatures[:]:  # Use slice to avoid modification during iteration
-        if not c.update(foods, waters, creatures):
-            creatures.remove(c)
-            if c == selected_creature:
-                selected_creature = None
-        else:
-            c.draw()
+        # Update and draw creatures
+        for c in creatures[:]:  # Use slice to avoid modification during iteration
+            if not c.update(foods, waters, creatures):
+                creatures.remove(c)
+                if c == selected_creature:
+                    selected_creature = None
+            else:
+                c.draw()
 
-    # Draw selected creature info
-    if selected_creature and selected_creature in creatures:
-        panel = pygame.Surface((250, 200))
-        panel.fill((30, 30, 30))
-        lines = [
-            f"Sex: {selected_creature.sex}",
-            f"Speed: {selected_creature.speed:.2f}",
-            f"Vision: {selected_creature.vision}",
-            f"Hunger: {selected_creature.hunger:.1f}",
-            f"Thirst: {selected_creature.thirst:.1f}",
-            f"Health: {selected_creature.health:.1f} / {selected_creature.max_health}",
-            f"Attack: {selected_creature.attack:.2f}",
-            f"Defense: {selected_creature.defense:.2f}",
-            f"Offspring: {selected_creature.offspring_count}",
-            f"Attractiveness: {selected_creature.attractiveness:.2f}",
-            f"Aggression: {selected_creature.aggression:.2f}",
-            f"Kills: {selected_creature.kill_count}"
+        # Draw selected creature info
+        if selected_creature and selected_creature in creatures:
+            lines = [
+                f"Sex: {selected_creature.sex}",
+                f"Age: {int(selected_creature.age/1000)}s / {int(selected_creature.max_age/1000)}s",
+                f"Speed: {selected_creature.speed:.2f}",
+                f"Vision: {selected_creature.vision}",
+                f"Hunger: {selected_creature.hunger:.1f}",
+                f"Thirst: {selected_creature.thirst:.1f}",
+                f"Health: {selected_creature.health:.1f} / {selected_creature.max_health}",
+                f"Attack: {selected_creature.attack:.2f}",
+                f"Defense: {selected_creature.defense:.2f}",
+                f"Offspring: {selected_creature.offspring_count}",
+                f"Attractiveness: {selected_creature.attractiveness:.2f}",
+                f"Aggression: {selected_creature.aggression:.2f}",
+                f"Kills: {selected_creature.kill_count}"
+            ]
+            if selected_creature.sex == 'F' and pygame.time.get_ticks() < selected_creature.gestation_timer:
+                lines.append("Pregnant")
+            # Dynamically size panel or allow scrolling if too many lines
+            panel_width = 250
+            line_height = 15
+            max_panel_height = 300
+            panel_height = min(max_panel_height, 20 + len(lines) * line_height)
+            panel = pygame.Surface((panel_width, panel_height))
+            panel.fill((30, 30, 30))
+            scroll_offset = 0
+            mouse_x, mouse_y = pygame.mouse.get_pos()
+            panel_x, panel_y = 10, 10
+            if len(lines) * line_height + 20 > max_panel_height:
+                # Allow scrolling if mouse is over panel
+                if panel_x <= mouse_x <= panel_x + panel_width and panel_y <= mouse_y <= panel_y + panel_height:
+                    rel_y = mouse_y - panel_y
+                    scroll_area = panel_height - 40
+                    if scroll_area > 0:
+                        scroll_ratio = rel_y / scroll_area
+                        max_scroll = len(lines) * line_height + 20 - max_panel_height
+                        scroll_offset = int(scroll_ratio * max_scroll)
+            for i, line in enumerate(lines):
+                y = 10 + i * line_height - scroll_offset
+                if 0 <= y < panel_height - 10:
+                    txt = FONT.render(line, True, WHITE)
+                    panel.blit(txt, (10, y))
+            screen.blit(panel, (panel_x, panel_y))
+
+        # Draw stats panel
+        if show_stats:
+            stats_panel = draw_stats(creatures)
+            if stats_panel is not None:
+                screen.blit(stats_panel, (screen.get_width() - 310, 10))
+
+        # Draw instructions
+        instructions = [
+            "Click: Select creature",
+            "ESC: Deselect",
+            "S: Toggle stats",
+            "WASD/Arrows: Move camera",
+            "Mouse wheel: Zoom"
         ]
-        # Add pregnancy label if applicable
-        if selected_creature.sex == 'F' and pygame.time.get_ticks() < selected_creature.gestation_timer:
-            lines.append("Pregnant")
-        for i, line in enumerate(lines):
-            txt = FONT.render(line, True, WHITE)
-            panel.blit(txt, (10, 10 + i * 15))
-        screen.blit(panel, (10, 10))
+        for i, instruction in enumerate(instructions):
+            text = FONT.render(instruction, True, WHITE)
+            screen.blit(text, (10, screen.get_height() - 100 + i * 20))
 
-    # Draw stats panel
-    if show_stats:
-        stats_panel = draw_stats(creatures)
-        if stats_panel is not None:
-            screen.blit(stats_panel, (screen.get_width() - 310, 10))
-
-    # Draw instructions
-    instructions = [
-        "Click: Select creature",
-        "ESC: Deselect",
-        "S: Toggle stats",
-        "WASD/Arrows: Move camera",
-        "Mouse wheel: Zoom"
-    ]
-    for i, instruction in enumerate(instructions):
-        text = FONT.render(instruction, True, WHITE)
-        screen.blit(text, (10, screen.get_height() - 100 + i * 20))
-
-    pygame.display.flip()
-    clock.tick(FPS)
-
-pygame.quit()
-sys.exit()
+        pygame.display.flip()
+        clock.tick(FPS)
+except Exception as e:
+    import traceback
+    print('Exception in main loop:', e)
+    traceback.print_exc()
+finally:
+    pygame.quit()
+    sys.exit()
