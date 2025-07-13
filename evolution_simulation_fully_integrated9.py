@@ -170,6 +170,7 @@ class Creature:
         self.attractiveness = random.uniform(0.3, 1.0)
         self.threshold = random.uniform(0.2, 1.0)
         self.gestation_timer = 0
+        self.gestation_duration = random.randint(60000, 120000)  # ms, 1-2 minutes per creature
 
         # Visual appearance - random hue
         self.hue = hue if hue is not None else random.random()
@@ -297,7 +298,7 @@ class Creature:
                 cost = mother.offspring_count * 5
                 mother.hunger = max(0, mother.hunger - cost)
                 mother.thirst = max(0, mother.thirst - cost)
-                mother.gestation_timer = pygame.time.get_ticks() + GESTATION_TIME
+                mother.gestation_timer = pygame.time.get_ticks() + mother.gestation_duration
                 break
 
     def make_offspring(self, partner):
@@ -324,6 +325,7 @@ class Creature:
         child.defense = mutate((self.defense + partner.defense) / 2, 0.1)
         child.aggression = max(0, min(1, mutate((self.aggression + partner.aggression) / 2, 0.1)))
         child.health = child.max_health  # Start at max health
+        child.gestation_duration = random.randint(60000, 120000)  # Inherit random gestation duration
         return child
 
     def draw(self):
@@ -350,48 +352,74 @@ class Creature:
             pygame.draw.rect(screen, health_color,
                              (pos[0] - bar_width // 2, pos[1] - int(10 * zoom), health_width, bar_height))
 
+            # Draw pink dot if pregnant
+            if self.sex == 'F' and pygame.time.get_ticks() < self.gestation_timer:
+                dot_x = pos[0] + bar_width // 2 + 4
+                dot_y = pos[1] - int(10 * zoom) + bar_height // 2
+                pygame.draw.circle(screen, (255, 105, 180), (dot_x, dot_y), max(2, int(2 * zoom)))
+
 
 # Simple stats display function
 def draw_stats(creatures):
     if not creatures:
         return
 
-    # Calculate averages
+    # Calculate averages and ranges
     total = len(creatures)
     avg_speed = sum(c.speed for c in creatures) / total
+    min_speed = min(c.speed for c in creatures)
+    max_speed = max(c.speed for c in creatures)
     avg_vision = sum(c.vision for c in creatures) / total
+    min_vision = min(c.vision for c in creatures)
+    max_vision = max(c.vision for c in creatures)
     avg_hunger = sum(c.hunger for c in creatures) / total
+    min_hunger = min(c.hunger for c in creatures)
+    max_hunger = max(c.hunger for c in creatures)
     avg_thirst = sum(c.thirst for c in creatures) / total
+    min_thirst = min(c.thirst for c in creatures)
+    max_thirst = max(c.thirst for c in creatures)
     avg_health = sum(c.health for c in creatures) / total
+    min_health = min(c.health for c in creatures)
+    max_health = max(c.health for c in creatures)
     avg_attractiveness = sum(c.attractiveness for c in creatures) / total
+    min_attractiveness = min(c.attractiveness for c in creatures)
+    max_attractiveness = max(c.attractiveness for c in creatures)
     avg_offspring = sum(c.offspring_count for c in creatures) / total
+    min_offspring = min(c.offspring_count for c in creatures)
+    max_offspring = max(c.offspring_count for c in creatures)
     avg_aggression = sum(c.aggression for c in creatures) / total
+    min_aggression = min(c.aggression for c in creatures)
+    max_aggression = max(c.aggression for c in creatures)
     avg_attack = sum(c.attack for c in creatures) / total
+    min_attack = min(c.attack for c in creatures)
+    max_attack = max(c.attack for c in creatures)
     avg_defense = sum(c.defense for c in creatures) / total
+    min_defense = min(c.defense for c in creatures)
+    max_defense = max(c.defense for c in creatures)
     total_kills = sum(c.kill_count for c in creatures)
 
     # Create stats panel
-    panel = pygame.Surface((300, 220))
+    panel = pygame.Surface((340, 260))
     panel.fill((30, 30, 30))
 
     stats_text = [
         f"Population: {total}",
         f"Total Kills: {total_kills}",
-        f"Avg Speed: {avg_speed:.2f}",
-        f"Avg Vision: {avg_vision:.1f}",
-        f"Avg Hunger: {avg_hunger:.1f}",
-        f"Avg Thirst: {avg_thirst:.1f}",
-        f"Avg Health: {avg_health:.1f}",
-        f"Avg Attack: {avg_attack:.2f}",
-        f"Avg Defense: {avg_defense:.2f}",
-        f"Avg Attractiveness: {avg_attractiveness:.2f}",
-        f"Avg Offspring: {avg_offspring:.1f}",
-        f"Avg Aggression: {avg_aggression:.2f}"
+        f"Avg Speed: {avg_speed:.2f}  (min: {min_speed:.2f}, max: {max_speed:.2f})",
+        f"Avg Vision: {avg_vision:.1f}  (min: {min_vision}, max: {max_vision})",
+        f"Avg Hunger: {avg_hunger:.1f}  (min: {min_hunger:.1f}, max: {max_hunger:.1f})",
+        f"Avg Thirst: {avg_thirst:.1f}  (min: {min_thirst:.1f}, max: {max_thirst:.1f})",
+        f"Avg Health: {avg_health:.1f}  (min: {min_health:.1f}, max: {max_health:.1f})",
+        f"Avg Attack: {avg_attack:.2f}  (min: {min_attack:.2f}, max: {max_attack:.2f})",
+        f"Avg Defense: {avg_defense:.2f}  (min: {min_defense:.2f}, max: {max_defense:.2f})",
+        f"Avg Attractiveness: {avg_attractiveness:.2f}  (min: {min_attractiveness:.2f}, max: {max_attractiveness:.2f})",
+        f"Avg Offspring: {avg_offspring:.1f}  (min: {min_offspring}, max: {max_offspring})",
+        f"Avg Aggression: {avg_aggression:.2f}  (min: {min_aggression:.2f}, max: {max_aggression:.2f})"
     ]
 
     for i, text in enumerate(stats_text):
         label = FONT.render(text, True, WHITE)
-        panel.blit(label, (10, 10 + i * 18))
+        panel.blit(label, (10, 10 + i * 20))
 
     return panel
 
@@ -474,7 +502,7 @@ while running:
 
     # Draw selected creature info
     if selected_creature and selected_creature in creatures:
-        panel = pygame.Surface((250, 180))
+        panel = pygame.Surface((250, 200))
         panel.fill((30, 30, 30))
         lines = [
             f"Sex: {selected_creature.sex}",
@@ -490,6 +518,9 @@ while running:
             f"Aggression: {selected_creature.aggression:.2f}",
             f"Kills: {selected_creature.kill_count}"
         ]
+        # Add pregnancy label if applicable
+        if selected_creature.sex == 'F' and pygame.time.get_ticks() < selected_creature.gestation_timer:
+            lines.append("Pregnant")
         for i, line in enumerate(lines):
             txt = FONT.render(line, True, WHITE)
             panel.blit(txt, (10, 10 + i * 15))
