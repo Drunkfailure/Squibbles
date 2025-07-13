@@ -350,7 +350,7 @@ class Creature:
             if math.hypot(other.x - self.x, other.y - self.y) < CREATURE_RADIUS * 2:
                 mother, father = (self, other) if self.sex == 'F' else (other, self)
                 # Infertility check
-                infertility_chance = (mother.infertility + father.infertility) / 2
+                infertility_chance = (mother.infertility + father.infertility) / 4
                 if random.uniform(0, 100) < infertility_chance:
                     # Mating fails
                     return
