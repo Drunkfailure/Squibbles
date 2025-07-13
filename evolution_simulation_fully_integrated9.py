@@ -169,10 +169,10 @@ class Creature:
         self.attractiveness = random.uniform(0.3, 1.0)
         self.threshold = random.uniform(0.2, 1.0)
         self.gestation_timer = 0
-        self.gestation_duration = random.randint(60000, 120000)  # ms, 1-2 minutes per creature
+        self.gestation_duration = random.randint(30000, 60000)  # ms, 30-60 seconds per creature
         self.infertility = random.randint(1, 100)  # 1-100, higher = more likely to fail
         # Age attributes
-        self.max_age = random.randint(120000, 300000)  # ms, 2-5 minutes
+        self.max_age = random.randint(120000, 360000)  # ms, 2-6 minutes
         self.maturity_age = int(self.max_age * 0.25)
         self.age = self.maturity_age  # First gen spawns at start of maturity
         # Visual appearance - random hue
@@ -389,12 +389,12 @@ class Creature:
         child.defense = mutate((self.defense + partner.defense) / 2, 0.1)
         child.aggression = max(0, min(1, mutate((self.aggression + partner.aggression) / 2, 0.1)))
         child.health = child.max_health  # Start at max health
-        child.gestation_duration = random.randint(60000, 120000)  # Inherit random gestation duration
+        child.gestation_duration = random.randint(30000, 60000)  # Inherit random gestation duration
         # Clamp gestation duration to be no longer than child's adult lifespan
         max_gestation = max(1000, child.max_age - child.maturity_age)
         child.gestation_duration = min(child.gestation_duration, max_gestation)
         child.max_age = int((self.max_age + partner.max_age) / 2 * random.uniform(0.95, 1.05))
-        child.max_age = max(120000, min(300000, child.max_age))  # Clamp to 2-5 minutes
+        child.max_age = max(120000, min(360000, child.max_age))  # Clamp to 2-6 minutes
         child.maturity_age = int(child.max_age * 0.25)
         child.infertility = max(1, min(100, int(mutate((self.infertility + partner.infertility) / 2, 0.1))))
         return child
