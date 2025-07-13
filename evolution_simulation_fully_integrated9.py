@@ -156,7 +156,7 @@ class Creature:
         self.y = y if y is not None else random.randint(0, MAP_HEIGHT)
         # Movement and perception stats - all randomly assigned
         self.speed = random.uniform(0.5, 2.0)
-        self.vision = random.randint(50, 120)
+        self.vision = random.randint(1, 120)
         # Survival stats - random starting values
         self.hunger = random.uniform(50, 100)
         self.thirst = random.uniform(50, 100)
@@ -380,7 +380,7 @@ class Creature:
 
         child = Creature(x=self.x, y=self.y, hue=mutate(hue_avg, 0.1), max_health=child_max_health)
         child.speed = mutate((self.speed + partner.speed) / 2, 0.1)
-        child.vision = max(10, int(mutate((self.vision + partner.vision) / 2, 0.1)))
+        child.vision = max(1, int(mutate((self.vision + partner.vision) / 2, 0.1)))
         child.offspring_count = max(1, min(5, int(mutate((self.offspring_count + partner.offspring_count) / 2, 0.1))))
         child.attractiveness = mutate((self.attractiveness + partner.attractiveness) / 2, 0.3)
         child.threshold = random.uniform(0.2, 1.0)
