@@ -45,6 +45,7 @@ FOOD_COUNT = 30
 WATER_COUNT = 30
 MAP_WIDTH = 1000
 MAP_HEIGHT = 800
+global_total_kills = 0
 
 
 # Setup menu values (modifies globals)
@@ -295,6 +296,11 @@ class Creature:
         if biome == Biome.TUNDRA:
             biome_speed_penalty = 0.7  # 30% slower in tundra
             biome_vision_penalty = 0.7  # 30% less vision in tundra
+        # Calculate effective stats
+        effective_attack = self.attack * age_factor
+        effective_defense = self.defense * age_factor
+        effective_attractiveness = self.attractiveness * age_factor
+        effective_aggression = self.aggression * age_factor
         # Handle birth if gestation is over and there are pending offspring
         if self.sex == 'F' and not is_pregnant and self.pending_offspring:
             for father, count in self.pending_offspring:
@@ -312,11 +318,6 @@ class Creature:
         # Apply age scaling to stats
         effective_speed = self.speed * age_factor * speed_modifier * biome_speed_penalty
         effective_vision = self.vision * age_factor * biome_vision_penalty
-        effective_attack = self.attack * age_factor
-        effective_defense = self.defense * age_factor
-        effective_attractiveness = self.attractiveness * age_factor
-        self.hunger -= self.speed * 0.02 * drain_multiplier
-        self.thirst -= self.speed * 0.02 * drain_multiplier
         # Die if hunger or thirst reaches 0 or age exceeds max_age
         if self.hunger <= 0 or self.thirst <= 0 or self.age >= self.max_age:
             return False
@@ -409,23 +410,21 @@ class Creature:
                         self.y += (dy / dist) * effective_speed
                     contested = True
                     break
-                effective_aggression = self.aggression
-                if self.age < self.maturity_age:
-                    effective_aggression *= 0.3  # 70% less likely to be aggressive
-                if self.hunger > 10 and self.thirst > 10:
-                    if random.random() < effective_aggression:
-                        damage = max(0, effective_attack - c.defense)
-                        if damage > 0:
-                            c.health -= damage
-                            if c.health <= 0:
-                                self.kill_count += 1
-                                global_total_kills += 1
+                if random.random() < effective_aggression:
+                    damage = max(0, effective_attack - c.defense)
+                    if damage > 0:
+                        was_alive = c.health > 0
+                        c.health -= damage
+                        if was_alive and c.health <= 0:
+                            self.kill_count += 1
+                            global_total_kills += 1
                     else:
                         if random.random() < c.aggression:
                             retaliation = max(0, c.attack - effective_defense)
                             if retaliation > 0:
+                                was_alive = self.health > 0
                                 self.health -= retaliation
-                                if self.health <= 0:
+                                if was_alive and self.health <= 0:
                                     c.kill_count += 1
                                     global_total_kills += 1
                         contested = True
@@ -440,6 +439,10 @@ class Creature:
         # Keep creature within bounds
         self.x = max(0, min(MAP_WIDTH, self.x))
         self.y = max(0, min(MAP_HEIGHT, self.y))
+        
+        # Random attacks based on aggression (independent of resource competition)
+        self.random_attack(creatures, effective_aggression, effective_attack, effective_defense)
+        
         # Eat and reproduce
         self.eat(foods, waters)
         self.reproduce(creatures, age_factor=age_factor)
@@ -463,6 +466,47 @@ class Creature:
         vision = vision_override if vision_override is not None else self.vision
         visible = [i for i in items if i.active and math.hypot(i.x - self.x, i.y - self.y) <= vision]
         return min(visible, key=lambda i: math.hypot(i.x - self.x, i.y - self.y), default=None)
+
+    def random_attack(self, creatures, effective_aggression, effective_attack, effective_defense):
+        global global_total_kills
+        """Randomly attack nearby creatures based on aggression level"""
+        # Skip if this creature is a child or pregnant
+        if self.age < self.maturity_age:
+            return
+        
+        # Check for nearby creatures to attack
+        for other in creatures:
+            if other is self:
+                continue
+            
+            # Calculate distance to other creature
+            distance = math.hypot(other.x - self.x, other.y - self.y)
+            
+            # Only attack if within attack range (vision radius)
+            if distance <= self.vision:
+                # Chance to attack based on aggression level
+                attack_chance = effective_aggression * 0.1  # 10% of aggression level per frame
+                if random.random() < attack_chance:
+                    # Attempt attack
+                    damage = max(0, effective_attack - other.defense)
+                    if damage > 0:
+                        was_alive = other.health > 0
+                        other.health -= damage
+                        if was_alive and other.health <= 0:
+                            self.kill_count += 1
+                            global_total_kills += 1
+                            print(f"Random attack kill! {self.sex} killed {other.sex}. Total kills: {global_total_kills}")
+                    else:
+                        # If attack fails, other creature might retaliate
+                        if random.random() < other.aggression * 0.2:  # 20% of other's aggression
+                            retaliation = max(0, other.attack - effective_defense)
+                            if retaliation > 0:
+                                was_alive = self.health > 0
+                                self.health -= retaliation
+                                if was_alive and self.health <= 0:
+                                    other.kill_count += 1
+                                    global_total_kills += 1
+                                    print(f"Random attack retaliation! {other.sex} killed {self.sex}. Total kills: {global_total_kills}")
 
     def eat(self, foods, waters):
         for food in foods:
@@ -684,8 +728,6 @@ foods = [Food() for _ in range(FOOD_COUNT)]
 waters = [Water() for _ in range(WATER_COUNT)]
 selected_creature = None
 show_stats = True
-
-global_total_kills = 0
 
 # Main loop
 try:
