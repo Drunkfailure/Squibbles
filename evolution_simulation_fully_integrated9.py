@@ -321,6 +321,11 @@ class Creature:
             return
         if self.sex == 'F' and pygame.time.get_ticks() < self.gestation_timer:
             return
+        # Prevent pregnancy if gestation duration is longer than remaining lifespan after maturity
+        if self.sex == 'F':
+            time_left = self.max_age - self.age
+            if self.gestation_duration > time_left:
+                return
         if self.hunger < 70 or self.thirst < 70:
             return
         for other in creatures:
@@ -377,6 +382,9 @@ class Creature:
         child.aggression = max(0, min(1, mutate((self.aggression + partner.aggression) / 2, 0.1)))
         child.health = child.max_health  # Start at max health
         child.gestation_duration = random.randint(60000, 120000)  # Inherit random gestation duration
+        # Clamp gestation duration to be no longer than child's adult lifespan
+        max_gestation = max(1000, child.max_age - child.maturity_age)
+        child.gestation_duration = min(child.gestation_duration, max_gestation)
         child.max_age = int((self.max_age + partner.max_age) / 2 * random.uniform(0.95, 1.05))
         child.max_age = max(120000, min(300000, child.max_age))  # Clamp to 2-5 minutes
         child.maturity_age = int(child.max_age * 0.25)
