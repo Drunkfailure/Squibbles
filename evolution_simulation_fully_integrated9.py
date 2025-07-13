@@ -31,7 +31,6 @@ BIG_FONT = pygame.font.SysFont(None, 36)
 
 # Setup window
 DEFAULT_WIDTH, DEFAULT_HEIGHT = 1000, 800
-screen = pygame.display.set_mode((DEFAULT_WIDTH, DEFAULT_HEIGHT))
 pygame.display.set_caption("Evolution Simulation")
 clock = pygame.time.Clock()
 
