@@ -478,20 +478,20 @@ while running:
     camera_speed = 5 / zoom  # Adjust speed based on zoom level
 
     if keys[pygame.K_w] or keys[pygame.K_UP]:
-        camera_offset[1] -= camera_speed
+        camera_offset[1] = int(camera_offset[1] - camera_speed)
     if keys[pygame.K_s] or keys[pygame.K_DOWN]:
-        camera_offset[1] += camera_speed
+        camera_offset[1] = int(camera_offset[1] + camera_speed)
     if keys[pygame.K_a] or keys[pygame.K_LEFT]:
-        camera_offset[0] -= camera_speed
+        camera_offset[0] = int(camera_offset[0] - camera_speed)
     if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
-        camera_offset[0] += camera_speed
+        camera_offset[0] = int(camera_offset[0] + camera_speed)
 
     # Update camera to follow selected creature (only if not manually moving)
     if selected_creature and selected_creature in creatures:
         if not (keys[pygame.K_w] or keys[pygame.K_s] or keys[pygame.K_a] or keys[pygame.K_d] or
                 keys[pygame.K_UP] or keys[pygame.K_DOWN] or keys[pygame.K_LEFT] or keys[pygame.K_RIGHT]):
-            camera_offset[0] = selected_creature.x - screen.get_width() // 2 / zoom
-            camera_offset[1] = selected_creature.y - screen.get_height() // 2 / zoom
+            camera_offset[0] = int(selected_creature.x - screen.get_width() // 2 / zoom)
+            camera_offset[1] = int(selected_creature.y - screen.get_height() // 2 / zoom)
 
     # Update and draw food
     for f in foods:
@@ -541,7 +541,8 @@ while running:
     # Draw stats panel
     if show_stats:
         stats_panel = draw_stats(creatures)
-        screen.blit(stats_panel, (screen.get_width() - 310, 10))
+        if stats_panel is not None:
+            screen.blit(stats_panel, (screen.get_width() - 310, 10))
 
     # Draw instructions
     instructions = [
