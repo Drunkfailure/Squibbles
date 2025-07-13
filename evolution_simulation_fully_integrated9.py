@@ -12,6 +12,7 @@ import random
 import math
 import colorsys
 import sys
+from enum import Enum
 
 # Constants
 FPS = 60
@@ -137,6 +138,28 @@ class Food(Respawnable):
             pos = world_to_screen(self.x, self.y)
             pygame.draw.circle(screen, (0, 255, 0), pos, 3)
 
+    def __init__(self):
+        super().__init__()
+        # Place food based on biome
+        placed = False
+        for _ in range(10):
+            x = random.randint(0, MAP_WIDTH)
+            y = random.randint(0, MAP_HEIGHT)
+            biome = get_biome(x, y)
+            if biome == Biome.DESERT and random.random() < 0.7:
+                continue  # Scarce in desert
+            if biome == Biome.RAINFOREST and random.random() < 0.7:
+                continue  # Plentiful, but not everywhere
+            if biome == Biome.TUNDRA and random.random() < 0.4:
+                continue  # More plentiful than desert, less than plains
+            self.x, self.y = x, y
+            self.spawn_x, self.spawn_y = x, y
+            placed = True
+            break
+        if not placed:
+            self.x, self.y = random.randint(0, MAP_WIDTH), random.randint(0, MAP_HEIGHT)
+            self.spawn_x, self.spawn_y = self.x, self.y
+
 
 class Water(Respawnable):
     def get_respawn_delay(self):
@@ -146,6 +169,28 @@ class Water(Respawnable):
         if self.active:
             pos = world_to_screen(self.x, self.y)
             pygame.draw.circle(screen, (0, 0, 255), pos, 3)
+
+    def __init__(self):
+        super().__init__()
+        # Place water based on biome
+        placed = False
+        for _ in range(10):
+            x = random.randint(0, MAP_WIDTH)
+            y = random.randint(0, MAP_HEIGHT)
+            biome = get_biome(x, y)
+            if biome == Biome.DESERT and random.random() < 0.8:
+                continue  # Scarce in desert
+            if biome == Biome.RAINFOREST and random.random() < 0.3:
+                continue  # Plentiful in rainforest
+            if biome == Biome.TUNDRA and random.random() < 0.3:
+                continue  # More plentiful than desert, less than plains
+            self.x, self.y = x, y
+            self.spawn_x, self.spawn_y = x, y
+            placed = True
+            break
+        if not placed:
+            self.x, self.y = random.randint(0, MAP_WIDTH), random.randint(0, MAP_HEIGHT)
+            self.spawn_x, self.spawn_y = self.x, self.y
 
 
 class Creature:
@@ -172,7 +217,7 @@ class Creature:
         self.gestation_duration = random.randint(30000, 60000)  # ms, 30-60 seconds per creature
         self.infertility = random.randint(1, 100)  # 1-100, higher = more likely to fail
         # Age attributes
-        self.max_age = random.randint(120000, 360000)  # ms, 2-6 minutes
+        self.max_age = random.randint(300000, 360000)  # ms, 5-6 minutes
         self.maturity_age = int(self.max_age * 0.25)
         self.age = self.maturity_age  # First gen spawns at start of maturity
         # Visual appearance - random hue
@@ -183,6 +228,7 @@ class Creature:
         self.defense = random.uniform(1, 5)
         self.aggression = random.uniform(0, 1)
         self.pending_offspring = []  # List of (father, offspring_count) tuples
+        self.seeking_mate_direction = random.uniform(0, 2 * math.pi)  # For mate-seeking movement
 
     def update(self, foods, waters, creatures):
         global global_total_kills
@@ -196,6 +242,15 @@ class Creature:
             age_factor = max(0.5, age_factor)
         # Pregnant check
         is_pregnant = self.sex == 'F' and pygame.time.get_ticks() < self.gestation_timer
+        # Rainforest and Tundra movement/vision penalty
+        biome = get_biome(self.x, self.y)
+        biome_speed_penalty = 1.0
+        biome_vision_penalty = 1.0
+        if biome == Biome.RAINFOREST:
+            biome_speed_penalty = 0.5  # Half speed in rainforest
+        if biome == Biome.TUNDRA:
+            biome_speed_penalty = 0.7  # 30% slower in tundra
+            biome_vision_penalty = 0.7  # 30% less vision in tundra
         # Handle birth if gestation is over and there are pending offspring
         if self.sex == 'F' and not is_pregnant and self.pending_offspring:
             for father, count in self.pending_offspring:
@@ -211,8 +266,8 @@ class Creature:
             drain_multiplier = 1.3  # 30% faster drain when pregnant
             speed_modifier = 1/1.5  # 1.5x slower
         # Apply age scaling to stats
-        effective_speed = self.speed * age_factor * speed_modifier
-        effective_vision = self.vision * age_factor
+        effective_speed = self.speed * age_factor * speed_modifier * biome_speed_penalty
+        effective_vision = self.vision * age_factor * biome_vision_penalty
         effective_attack = self.attack * age_factor
         effective_defense = self.defense * age_factor
         effective_attractiveness = self.attractiveness * age_factor
@@ -225,6 +280,7 @@ class Creature:
         food_target = self.find_nearest(foods, vision_override=effective_vision)
         water_target = self.find_nearest(waters, vision_override=effective_vision)
         target = None
+        # If hungry or thirsty, seek food/water and do not move randomly
         if self.hunger < 70 or self.thirst < 70:
             if self.hunger < self.thirst and food_target:
                 target = food_target
@@ -232,6 +288,37 @@ class Creature:
                 target = water_target
             elif food_target:
                 target = food_target
+        # If well-nourished, seek a mate
+        elif self.hunger >= 70 and self.thirst >= 70:
+            mate_target = None
+            for other in creatures:
+                if other is self or {self.sex, other.sex} != {'M', 'F'}:
+                    continue
+                if other.hunger < 70 or other.thirst < 70:
+                    continue
+                if self.sex == 'M' and pygame.time.get_ticks() < other.gestation_timer:
+                    continue
+                if self.attractiveness * age_factor < other.threshold or other.attractiveness * age_factor < self.threshold:
+                    continue
+                other_age_pct = other.age / other.max_age
+                if other_age_pct < 0.25 or other_age_pct > 0.75:
+                    continue
+                if math.hypot(other.x - self.x, other.y - self.y) <= effective_vision:
+                    mate_target = other
+                    break
+            if mate_target:
+                target = mate_target
+            else:
+                # Move in a persistent direction while seeking mate
+                self.x += math.cos(self.seeking_mate_direction) * effective_speed
+                self.y += math.sin(self.seeking_mate_direction) * effective_speed
+                # Occasionally change direction slightly for exploration
+                if random.random() < 0.01:
+                    self.seeking_mate_direction += random.uniform(-0.5, 0.5)
+                # Clamp to map bounds
+                self.x = max(0, min(MAP_WIDTH, self.x))
+                self.y = max(0, min(MAP_HEIGHT, self.y))
+                return True
         # Handle combat
         contested = False
         for c in creatures:
@@ -394,7 +481,7 @@ class Creature:
         max_gestation = max(1000, child.max_age - child.maturity_age)
         child.gestation_duration = min(child.gestation_duration, max_gestation)
         child.max_age = int((self.max_age + partner.max_age) / 2 * random.uniform(0.95, 1.05))
-        child.max_age = max(120000, min(360000, child.max_age))  # Clamp to 2-6 minutes
+        child.max_age = max(300000, min(360000, child.max_age))  # Clamp to 5-6 minutes
         child.maturity_age = int(child.max_age * 0.25)
         child.infertility = max(1, min(100, int(mutate((self.infertility + partner.infertility) / 2, 0.1))))
         return child
@@ -526,11 +613,69 @@ show_stats = True
 
 global_total_kills = 0
 
+# Biome definitions
+class Biome(Enum):
+    PLAINS = 0
+    DESERT = 1
+    RAINFOREST = 2
+    TUNDRA = 3
+
+# Biome map generation
+def generate_biomes(map_width, map_height, num_biomes=6):
+    biomes = []
+    biome_map = [[Biome.PLAINS for _ in range(map_width)] for _ in range(map_height)]
+    # Randomly decide which biomes will be present (Plains always present)
+    possible_biomes = [Biome.PLAINS]
+    if random.random() < 0.8:
+        possible_biomes.append(Biome.DESERT)
+    if random.random() < 0.8:
+        possible_biomes.append(Biome.RAINFOREST)
+    if random.random() < 0.8:
+        possible_biomes.append(Biome.TUNDRA)
+    weights = [0.5 if b == Biome.PLAINS else 0.5/(len(possible_biomes)-1) for b in possible_biomes]
+    for _ in range(num_biomes):
+        bx = random.randint(0, map_width-1)
+        by = random.randint(0, map_height-1)
+        bradius = random.randint(150, 400)
+        btype = random.choices(possible_biomes, weights=weights)[0]
+        biomes.append((bx, by, bradius, btype))
+        for y in range(max(0, by-bradius), min(map_height, by+bradius)):
+            for x in range(max(0, bx-bradius), min(map_width, bx+bradius)):
+                if math.hypot(x-bx, y-by) < bradius:
+                    biome_map[y][x] = btype
+    return biome_map
+
+# Generate biome map after setup
+biome_map = generate_biomes(MAP_WIDTH, MAP_HEIGHT)
+
+# Helper to get biome at a position
+def get_biome(x, y):
+    xi = int(min(max(x, 0), MAP_WIDTH-1))
+    yi = int(min(max(y, 0), MAP_HEIGHT-1))
+    return biome_map[yi][xi]
+
 # Main loop
 try:
     running = True
     while running:
         screen.fill(BLACK)
+
+        # Draw biome visualization
+        biome_colors = {
+            Biome.PLAINS: (0, 255, 0, 60),        # Light green
+            Biome.DESERT: (255, 255, 0, 60),      # Yellow
+            Biome.RAINFOREST: (0, 100, 0, 80),    # Dark green
+            Biome.TUNDRA: (255, 255, 255, 80),    # White
+        }
+        biome_surface = pygame.Surface((MAP_WIDTH, MAP_HEIGHT), pygame.SRCALPHA)
+        for y in range(0, MAP_HEIGHT, 10):
+            for x in range(0, MAP_WIDTH, 10):
+                biome = get_biome(x, y)
+                color = biome_colors[biome]
+                pygame.draw.rect(biome_surface, color, (x, y, 10, 10))
+        # Blit biome surface with camera/zoom
+        surf = pygame.transform.smoothscale(biome_surface, (int(MAP_WIDTH * zoom), int(MAP_HEIGHT * zoom)))
+        screen.blit(surf, (-int(camera_offset[0] * zoom), -int(camera_offset[1] * zoom)))
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
