@@ -85,11 +85,15 @@ def show_setup_menu():
     except ValueError:
         MAP_HEIGHT = 800
 
+    # Reset global kill counter on new simulation
+    global global_total_kills
+    global_total_kills = 0
+
 
 show_setup_menu()
 
-# Update screen size after setup
-screen = pygame.display.set_mode((min(MAP_WIDTH, DEFAULT_WIDTH), min(MAP_HEIGHT, DEFAULT_HEIGHT)))
+# Always use default window size
+screen = pygame.display.set_mode((DEFAULT_WIDTH, DEFAULT_HEIGHT))
 
 
 # Utilities
@@ -214,6 +218,8 @@ class Creature:
                             c.health -= damage
                             if c.health <= 0:
                                 self.kill_count += 1
+                                global global_total_kills
+                                global_total_kills += 1
                     else:
                         # Defender chooses to retaliate based on aggression
                         if random.random() < c.aggression:
@@ -222,6 +228,8 @@ class Creature:
                                 self.health -= retaliation
                                 if self.health <= 0:
                                     c.kill_count += 1
+                                    global global_total_kills
+                                    global_total_kills += 1
                         contested = True
 
         # Die if health reaches 0
@@ -396,7 +404,9 @@ def draw_stats(creatures):
     avg_defense = sum(c.defense for c in creatures) / total
     min_defense = min(c.defense for c in creatures)
     max_defense = max(c.defense for c in creatures)
-    total_kills = sum(c.kill_count for c in creatures)
+    # Use global_total_kills instead of recalculating
+    global global_total_kills
+    total_kills = global_total_kills
 
     # Create stats panel
     panel = pygame.Surface((340, 260))
@@ -430,6 +440,8 @@ foods = [Food() for _ in range(FOOD_COUNT)]
 waters = [Water() for _ in range(WATER_COUNT)]
 selected_creature = None
 show_stats = True
+
+global_total_kills = 0
 
 # Main loop
 running = True
