@@ -109,7 +109,48 @@ def world_to_screen(x, y):
     screen_y = int((y - camera_offset[1]) * zoom)
     return screen_x, screen_y
 
+###########################
+# Biome definitions & helpers
+class Biome(Enum):
+    PLAINS = 0
+    DESERT = 1
+    RAINFOREST = 2
+    TUNDRA = 3
 
+def generate_biomes(map_width, map_height, num_biomes=6):
+    biomes = []
+    biome_map = [[Biome.PLAINS for _ in range(map_width)] for _ in range(map_height)]
+    # Randomly decide which biomes will be present (Plains always present)
+    possible_biomes = [Biome.PLAINS]
+    if random.random() > 0.1:
+        possible_biomes.append(Biome.DESERT)
+    if random.random() > 0.1:
+        possible_biomes.append(Biome.RAINFOREST)
+    if random.random() > 0.1:
+        possible_biomes.append(Biome.TUNDRA)
+    # Distribute weights evenly among present biomes
+    weights = [1.0 / len(possible_biomes) for _ in possible_biomes]
+    for _ in range(num_biomes):
+        bx = random.randint(0, map_width-1)
+        by = random.randint(0, map_height-1)
+        bradius = random.randint(150, 400)
+        btype = random.choices(possible_biomes, weights=weights)[0]
+        biomes.append((bx, by, bradius, btype))
+        for y in range(max(0, by-bradius), min(map_height, by+bradius)):
+            for x in range(max(0, bx-bradius), min(map_width, bx+bradius)):
+                if math.hypot(x-bx, y-by) < bradius:
+                    biome_map[y][x] = btype
+    return biome_map
+
+def get_biome(x, y):
+    xi = int(min(max(x, 0), MAP_WIDTH-1))
+    yi = int(min(max(y, 0), MAP_HEIGHT-1))
+    return biome_map[yi][xi]
+
+# Generate biome map after setup
+biome_map = generate_biomes(MAP_WIDTH, MAP_HEIGHT)
+
+###########################
 # Entities
 class Respawnable:
     def __init__(self):
@@ -136,7 +177,8 @@ class Food(Respawnable):
     def draw(self):
         if self.active:
             pos = world_to_screen(self.x, self.y)
-            pygame.draw.circle(screen, (0, 255, 0), pos, 3)
+            size = max(2, int(2 * zoom))
+            pygame.draw.rect(screen, (0, 255, 0), (pos[0] - size//2, pos[1] - size//2, size, size))
 
     def __init__(self):
         super().__init__()
@@ -168,7 +210,8 @@ class Water(Respawnable):
     def draw(self):
         if self.active:
             pos = world_to_screen(self.x, self.y)
-            pygame.draw.circle(screen, (0, 0, 255), pos, 3)
+            size = max(2, int(2 * zoom))
+            pygame.draw.rect(screen, (0, 0, 255), (pos[0] - size//2, pos[1] - size//2, size, size))
 
     def __init__(self):
         super().__init__()
@@ -229,6 +272,7 @@ class Creature:
         self.aggression = random.uniform(0, 1)
         self.pending_offspring = []  # List of (father, offspring_count) tuples
         self.seeking_mate_direction = random.uniform(0, 2 * math.pi)  # For mate-seeking movement
+        self.seeking_resource_direction = random.uniform(0, 2 * math.pi)  # For food/water seeking movement
 
     def update(self, foods, waters, creatures):
         global global_total_kills
@@ -288,6 +332,22 @@ class Creature:
                 target = water_target
             elif food_target:
                 target = food_target
+            else:
+                # Move in a persistent direction while seeking food/water
+                self.x += math.cos(self.seeking_resource_direction) * effective_speed
+                self.y += math.sin(self.seeking_resource_direction) * effective_speed
+                # If at map edge, change direction
+                hit_edge = False
+                if self.x <= 0 or self.x >= MAP_WIDTH:
+                    hit_edge = True
+                if self.y <= 0 or self.y >= MAP_HEIGHT:
+                    hit_edge = True
+                if hit_edge or random.random() < 0.01:
+                    self.seeking_resource_direction = random.uniform(0, 2 * math.pi)
+                # Clamp to map bounds
+                self.x = max(0, min(MAP_WIDTH, self.x))
+                self.y = max(0, min(MAP_HEIGHT, self.y))
+                return True
         # If well-nourished, seek a mate
         elif self.hunger >= 70 and self.thirst >= 70:
             mate_target = None
@@ -315,6 +375,14 @@ class Creature:
                 # Occasionally change direction slightly for exploration
                 if random.random() < 0.01:
                     self.seeking_mate_direction += random.uniform(-0.5, 0.5)
+                # If at map edge, change direction
+                hit_edge = False
+                if self.x <= 0 or self.x >= MAP_WIDTH:
+                    hit_edge = True
+                if self.y <= 0 or self.y >= MAP_HEIGHT:
+                    hit_edge = True
+                if hit_edge:
+                    self.seeking_mate_direction = random.uniform(0, 2 * math.pi)
                 # Clamp to map bounds
                 self.x = max(0, min(MAP_WIDTH, self.x))
                 self.y = max(0, min(MAP_HEIGHT, self.y))
@@ -491,7 +559,7 @@ class Creature:
         # Only draw if on screen
         if -CREATURE_RADIUS <= pos[0] <= screen.get_width() + CREATURE_RADIUS and \
                 -CREATURE_RADIUS <= pos[1] <= screen.get_height() + CREATURE_RADIUS:
-            pygame.draw.circle(screen, self.color, pos, int(CREATURE_RADIUS * zoom))
+            pygame.draw.circle(screen, self.color, pos, int(CREATURE_RADIUS * 1.5 * zoom))
 
             # Draw health bar
             bar_width = int(20 * zoom)
@@ -503,9 +571,15 @@ class Creature:
 
             # Color gradient: green at full health, yellow at half, red at low
             if health_ratio > 0.6:
-                health_color = (int(255 * (1 - health_ratio) * 2.5), 255, 0)  # Green to yellow
+                r = int(255 * (1 - health_ratio) * 2.5)
+                g = 255
+                b = 0
+                health_color = (max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b)))  # Green to yellow
             else:
-                health_color = (255, int(255 * health_ratio * 1.67), 0)  # Yellow to red
+                r = 255
+                g = int(255 * health_ratio * 1.67)
+                b = 0
+                health_color = (max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b)))  # Yellow to red
 
             pygame.draw.rect(screen, health_color,
                              (pos[0] - bar_width // 2, pos[1] - int(10 * zoom), health_width, bar_height))
@@ -515,20 +589,20 @@ class Creature:
             if self.sex == 'F' and pygame.time.get_ticks() < self.gestation_timer:
                 dot_x = pos[0] + bar_width // 2 + 4 + dot_offset
                 dot_y = pos[1] - int(10 * zoom) + bar_height // 2
-                pygame.draw.circle(screen, (255, 105, 180), (dot_x, dot_y), max(2, int(2 * zoom)))
-                dot_offset += 8  # space for next dot
+                pygame.draw.circle(screen, (255, 105, 180), (dot_x, dot_y), max(3, int(3 * zoom)))
+                dot_offset += 10  # space for next dot
             # Draw light blue dot if child (age < 25% max_age)
             if self.age < self.maturity_age:
                 dot_x = pos[0] + bar_width // 2 + 4 + dot_offset
                 dot_y = pos[1] - int(10 * zoom) + bar_height // 2
-                pygame.draw.circle(screen, (135, 206, 250), (dot_x, dot_y), max(2, int(2 * zoom)))
-                dot_offset += 8
+                pygame.draw.circle(screen, (135, 206, 250), (dot_x, dot_y), max(3, int(3 * zoom)))
+                dot_offset += 10
             # Draw grey dot if geriatric (age > 75% max_age)
             if self.age > self.max_age * 0.75:
                 dot_x = pos[0] + bar_width // 2 + 4 + dot_offset
                 dot_y = pos[1] - int(10 * zoom) + bar_height // 2
-                pygame.draw.circle(screen, (180, 180, 180), (dot_x, dot_y), max(2, int(2 * zoom)))
-                dot_offset += 8
+                pygame.draw.circle(screen, (180, 180, 180), (dot_x, dot_y), max(3, int(3 * zoom)))
+                dot_offset += 10
 
 
 # Simple stats display function
@@ -612,47 +686,6 @@ selected_creature = None
 show_stats = True
 
 global_total_kills = 0
-
-# Biome definitions
-class Biome(Enum):
-    PLAINS = 0
-    DESERT = 1
-    RAINFOREST = 2
-    TUNDRA = 3
-
-# Biome map generation
-def generate_biomes(map_width, map_height, num_biomes=6):
-    biomes = []
-    biome_map = [[Biome.PLAINS for _ in range(map_width)] for _ in range(map_height)]
-    # Randomly decide which biomes will be present (Plains always present)
-    possible_biomes = [Biome.PLAINS]
-    if random.random() < 0.8:
-        possible_biomes.append(Biome.DESERT)
-    if random.random() < 0.8:
-        possible_biomes.append(Biome.RAINFOREST)
-    if random.random() < 0.8:
-        possible_biomes.append(Biome.TUNDRA)
-    weights = [0.5 if b == Biome.PLAINS else 0.5/(len(possible_biomes)-1) for b in possible_biomes]
-    for _ in range(num_biomes):
-        bx = random.randint(0, map_width-1)
-        by = random.randint(0, map_height-1)
-        bradius = random.randint(150, 400)
-        btype = random.choices(possible_biomes, weights=weights)[0]
-        biomes.append((bx, by, bradius, btype))
-        for y in range(max(0, by-bradius), min(map_height, by+bradius)):
-            for x in range(max(0, bx-bradius), min(map_width, bx+bradius)):
-                if math.hypot(x-bx, y-by) < bradius:
-                    biome_map[y][x] = btype
-    return biome_map
-
-# Generate biome map after setup
-biome_map = generate_biomes(MAP_WIDTH, MAP_HEIGHT)
-
-# Helper to get biome at a position
-def get_biome(x, y):
-    xi = int(min(max(x, 0), MAP_WIDTH-1))
-    yi = int(min(max(y, 0), MAP_HEIGHT-1))
-    return biome_map[yi][xi]
 
 # Main loop
 try:
