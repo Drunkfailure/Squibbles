@@ -182,6 +182,7 @@ class Creature:
         self.attack = random.uniform(1, 5)
         self.defense = random.uniform(1, 5)
         self.aggression = random.uniform(0, 1)
+        self.pending_offspring = []  # List of (father, offspring_count) tuples
 
     def update(self, foods, waters, creatures):
         global global_total_kills
@@ -195,6 +196,14 @@ class Creature:
             age_factor = max(0.5, age_factor)
         # Pregnant check
         is_pregnant = self.sex == 'F' and pygame.time.get_ticks() < self.gestation_timer
+        # Handle birth if gestation is over and there are pending offspring
+        if self.sex == 'F' and not is_pregnant and self.pending_offspring:
+            for father, count in self.pending_offspring:
+                for _ in range(count):
+                    child = self.make_offspring(father)
+                    child.age = 0  # Spawn at age 0
+                    creatures.append(child)
+            self.pending_offspring.clear()
         # Drain hunger and thirst
         drain_multiplier = 1.0
         speed_modifier = 1.0
@@ -319,7 +328,7 @@ class Creature:
         age_pct = self.age / self.max_age
         if age_pct < 0.25 or age_pct > 0.75:
             return
-        if self.sex == 'F' and pygame.time.get_ticks() < self.gestation_timer:
+        if self.sex == 'F' and (pygame.time.get_ticks() < self.gestation_timer or self.pending_offspring):
             return
         # Prevent pregnancy if gestation duration is longer than remaining lifespan after maturity
         if self.sex == 'F':
@@ -345,9 +354,8 @@ class Creature:
                 if random.uniform(0, 100) < infertility_chance:
                     # Mating fails
                     return
-                for _ in range(mother.offspring_count):
-                    child = mother.make_offspring(father)
-                    creatures.append(child)
+                # Store pending offspring for birth after gestation
+                mother.pending_offspring.append((father, mother.offspring_count))
                 # Cost scales with offspring count, applied to both parents
                 cost = mother.offspring_count * 10  # 10 units per offspring (adjust as needed)
                 mother.hunger = max(0, mother.hunger - cost)
@@ -481,9 +489,6 @@ def draw_stats(creatures):
     avg_infertility = sum(c.infertility for c in creatures) / total
 
     # Create stats panel
-    panel = pygame.Surface((340, 260))
-    panel.fill((30, 30, 30))
-
     stats_text = [
         f"Population: {total}",
         f"Total Kills: {total_kills}",
@@ -501,6 +506,9 @@ def draw_stats(creatures):
         f"Avg Offspring: {avg_offspring:.1f}  (min: {min_offspring}, max: {max_offspring})",
         f"Avg Aggression: {avg_aggression:.2f}  (min: {min_aggression:.2f}, max: {max_aggression:.2f})"
     ]
+    panel_height = 20 + len(stats_text) * 20
+    panel = pygame.Surface((340, panel_height))
+    panel.fill((30, 30, 30))
 
     for i, text in enumerate(stats_text):
         label = FONT.render(text, True, WHITE)
@@ -607,7 +615,8 @@ try:
                 f"Infertility: {selected_creature.infertility}"
             ]
             if selected_creature.sex == 'F' and pygame.time.get_ticks() < selected_creature.gestation_timer:
-                lines.append("Pregnant")
+                remaining = max(0, (selected_creature.gestation_timer - pygame.time.get_ticks()) // 1000)
+                lines.append(f"Pregnant ({remaining}s left)")
             # Dynamically size panel or allow scrolling if too many lines
             panel_width = 250
             line_height = 15
