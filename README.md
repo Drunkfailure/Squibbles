@@ -145,6 +145,8 @@ Parasitic womb chains infecting entire populations
 
 Visual lineage trees
 
+Different foods that provide more/less hunger, other uniqueness.
+
 Environmental hazards and disease
 
 Weather in the different biomes
