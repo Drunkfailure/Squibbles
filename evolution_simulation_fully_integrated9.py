@@ -13,6 +13,7 @@ import math
 import colorsys
 import sys
 from enum import Enum
+from mutations import MUTATIONS, apply_mutation_effect, handle_pack_mentality, handle_child_eater, handle_cannibal, handle_immortal, handle_radioactive, handle_pregnancy_hunter, handle_rage_state, handle_fragmented_dna, handle_blood_frenzy, trigger_blood_frenzy, handle_venom_glands, trigger_venom_glands, handle_howler, handle_burrower, handle_photosynthetic_skin, handle_cold_blooded, handle_thermal_core, handle_bioluminescent, handle_twin_gene, handle_loyal_mate, set_loyal_mates, handle_brood_sac, handle_springy_tendons, handle_tail_whip, handle_slippery_skin, handle_hyperaware, handle_paranoia, handle_dominant, handle_cowardly, handle_regen_core, handle_poisonous_blood
 
 # Constants
 FPS = 60
@@ -46,6 +47,22 @@ WATER_COUNT = 30
 MAP_WIDTH = 1000
 MAP_HEIGHT = 800
 global_total_kills = 0
+
+# Day/night cycle
+DAY_LENGTH_MS = 30000  # 30 seconds day
+NIGHT_LENGTH_MS = 30000  # 30 seconds night
+is_daytime = True
+last_cycle_switch = pygame.time.get_ticks()
+
+def update_day_night():
+    global is_daytime, last_cycle_switch
+    now = pygame.time.get_ticks()
+    if is_daytime and now - last_cycle_switch > DAY_LENGTH_MS:
+        is_daytime = False
+        last_cycle_switch = now
+    elif not is_daytime and now - last_cycle_switch > NIGHT_LENGTH_MS:
+        is_daytime = True
+        last_cycle_switch = now
 
 
 # Setup menu values (modifies globals)
@@ -94,6 +111,13 @@ show_setup_menu()
 screen = pygame.display.set_mode((DEFAULT_WIDTH, DEFAULT_HEIGHT))
 pygame.display.set_caption("Evolution Simulation")
 clock = pygame.time.Clock()
+
+# Load day/night icons
+sun_icon = pygame.image.load('sun.png')
+moon_icon = pygame.image.load('moon.png')
+icon_size = 48
+sun_icon = pygame.transform.smoothscale(sun_icon, (icon_size, icon_size))
+moon_icon = pygame.transform.smoothscale(moon_icon, (icon_size, icon_size))
 
 
 # Utilities
@@ -238,8 +262,17 @@ class Water(Respawnable):
 
 
 class Creature:
-    def __init__(self, x=None, y=None, hue=None, max_health=None):
+    _id_counter = 1
+    def __init__(self, x=None, y=None, hue=None, max_health=None, mutations=None, pack_id=None, pack_color=None):
+        self.unique_id = Creature._id_counter
+        Creature._id_counter += 1
         self.kill_count = 0
+        self.mutations = list(mutations) if mutations else []
+        # Make mutations extremely rare: 1% chance for a single random mutation
+        if not mutations and random.random() < 0.01:
+            self.mutations = [random.choice(list(MUTATIONS.keys()))]
+        self.pack_id = pack_id
+        self.pack_color = pack_color
         # Position - random within map bounds
         self.x = x if x is not None else random.randint(0, MAP_WIDTH)
         self.y = y if y is not None else random.randint(0, MAP_HEIGHT)
@@ -274,9 +307,33 @@ class Creature:
         self.pending_offspring = []  # List of (father, offspring_count) tuples
         self.seeking_mate_direction = random.uniform(0, 2 * math.pi)  # For mate-seeking movement
         self.seeking_resource_direction = random.uniform(0, 2 * math.pi)  # For food/water seeking movement
+        self._rage_state = 'none'
+        self._rage_timer = 0
+        self._rage_cooldown = 0
+        self._blood_frenzy = 0
+        self._burrowed_until = 0
+        self._burrow_cooldown = 0
+        self._slippery_flash = False
+        self._tailwhip_flash = False
+        # --- Mutation state attributes ---
+        self.mother_id = None  # For Territorial/offspring logic
+        self._parasitic_infecting = False  # For Parasitic Womb
+        self._parasitic_hosted_by = None # For Parasitic Womb host
 
     def update(self, foods, waters, creatures):
         global global_total_kills
+        # Call mutation handlers for per-frame effects
+        handle_fragmented_dna(self)
+        handle_venom_glands(self)
+        burrowed = handle_burrower(self)
+        howler_mult = handle_howler(self, creatures)
+        rage_attack_mult, rage_speed_mult, rage_aggression_mult = handle_rage_state(self)
+        frenzy_attack_mult, frenzy_speed_mult, frenzy_aggression_mult = handle_blood_frenzy(self)
+        attack_mult = rage_attack_mult * frenzy_attack_mult
+        speed_mult = rage_speed_mult * frenzy_speed_mult
+        aggression_mult = rage_aggression_mult * frenzy_aggression_mult * howler_mult
+        # Loyal Mate: stat boost and mate following
+        loyal_mult, mate_target = handle_loyal_mate(self, creatures)
         # Age update
         self.age += clock.get_time()  # ms per frame
         # Age scaling factor
@@ -287,6 +344,8 @@ class Creature:
             age_factor = max(0.5, age_factor)
         # Pregnant check
         is_pregnant = self.sex == 'F' and pygame.time.get_ticks() < self.gestation_timer
+        # Bioluminescent: boost attractiveness at night, get glow color
+        biolum_mult, biolum_color = handle_bioluminescent(self, is_daytime)
         # Rainforest and Tundra movement/vision penalty
         biome = get_biome(self.x, self.y)
         biome_speed_penalty = 1.0
@@ -296,31 +355,54 @@ class Creature:
         if biome == Biome.TUNDRA:
             biome_speed_penalty = 0.7  # 30% slower in tundra
             biome_vision_penalty = 0.7  # 30% less vision in tundra
-        # Calculate effective stats
-        effective_attack = self.attack * age_factor
-        effective_defense = self.defense * age_factor
-        effective_attractiveness = self.attractiveness * age_factor
-        effective_aggression = self.aggression * age_factor
-        # Handle birth if gestation is over and there are pending offspring
-        if self.sex == 'F' and not is_pregnant and self.pending_offspring:
-            for father, count in self.pending_offspring:
-                for _ in range(count):
-                    child = self.make_offspring(father)
-                    child.age = 0  # Spawn at age 0
-                    creatures.append(child)
-            self.pending_offspring.clear()
+        # Hyperaware: double vision, flee from threats
+        hyperaware_mult, hyperaware_threat = handle_hyperaware(self, creatures)
+        # Paranoia: flee from any non-pack, non-mate creature
+        paranoia_threat = handle_paranoia(self, creatures)
         # Drain hunger and thirst
         drain_multiplier = 1.0
         speed_modifier = 1.0
         if is_pregnant:
             drain_multiplier = 1.3  # 30% faster drain when pregnant
             speed_modifier = 1/1.5  # 1.5x slower
+        BASE_HUNGER_DRAIN = 0.02  # Tune as needed
+        BASE_THIRST_DRAIN = 0.025  # Tune as needed
+        self.hunger -= BASE_HUNGER_DRAIN * drain_multiplier * self.speed
+        self.thirst -= BASE_THIRST_DRAIN * drain_multiplier * self.speed
         # Apply age scaling to stats
-        effective_speed = self.speed * age_factor * speed_modifier * biome_speed_penalty
-        effective_vision = self.vision * age_factor * biome_vision_penalty
+        effective_attack = self.attack * age_factor * attack_mult * loyal_mult
+        effective_defense = self.defense * age_factor * loyal_mult
+        effective_attractiveness = self.attractiveness * age_factor * biolum_mult * loyal_mult
+        effective_aggression = self.aggression * age_factor * aggression_mult * loyal_mult
+        effective_speed = self.speed * age_factor * speed_modifier * biome_speed_penalty * speed_mult * loyal_mult
+        effective_vision = self.vision * age_factor * biome_vision_penalty * loyal_mult * hyperaware_mult
+        # Flee logic for Hyperaware/Paranoia
+        flee_from = hyperaware_threat or paranoia_threat
+        if flee_from is not None:
+            dx, dy = self.x - flee_from.x, self.y - flee_from.y
+            dist = math.hypot(dx, dy)
+            if dist > 0:
+                self.x += (dx / dist) * effective_speed
+                self.y += (dy / dist) * effective_speed
+            self.x = max(0, min(MAP_WIDTH, self.x))
+            self.y = max(0, min(MAP_HEIGHT, self.y))
+            return True
         # Die if hunger or thirst reaches 0 or age exceeds max_age
         if self.hunger <= 0 or self.thirst <= 0 or self.age >= self.max_age:
+            # Immortal mutation prevents death from these causes
+            if handle_immortal(self):
+                return True
             return False
+        # If burrowed, skip movement, attacking, and make invulnerable
+        if burrowed:
+            # Visual effect and stat update only
+            self.x = max(0, min(MAP_WIDTH, self.x))
+            self.y = max(0, min(MAP_HEIGHT, self.y))
+            # Still drain hunger/thirst, age, and allow eating/reproducing
+            self.eat(foods, waters)
+            self.reproduce(creatures, age_factor=age_factor)
+            handle_pack_mentality(self, creatures, get_biome)
+            return True
         # Find targets (use effective_vision)
         food_target = self.find_nearest(foods, vision_override=effective_vision)
         water_target = self.find_nearest(waters, vision_override=effective_vision)
@@ -351,43 +433,54 @@ class Creature:
                 return True
         # If well-nourished, seek a mate
         elif self.hunger >= 70 and self.thirst >= 70:
-            mate_target = None
-            for other in creatures:
-                if other is self or {self.sex, other.sex} != {'M', 'F'}:
-                    continue
-                if other.hunger < 70 or other.thirst < 70:
-                    continue
-                if self.sex == 'M' and pygame.time.get_ticks() < other.gestation_timer:
-                    continue
-                if self.attractiveness * age_factor < other.threshold or other.attractiveness * age_factor < self.threshold:
-                    continue
-                other_age_pct = other.age / other.max_age
-                if other_age_pct < 0.25 or other_age_pct > 0.75:
-                    continue
-                if math.hypot(other.x - self.x, other.y - self.y) <= effective_vision:
-                    mate_target = other
-                    break
-            if mate_target:
-                target = mate_target
+            # Rage State: prioritize attacking during rage
+            if hasattr(self, '_rage_state') and self._rage_state == 'rage':
+                pass  # skip mate seeking, will attack below
             else:
-                # Move in a persistent direction while seeking mate
-                self.x += math.cos(self.seeking_mate_direction) * effective_speed
-                self.y += math.sin(self.seeking_mate_direction) * effective_speed
-                # Occasionally change direction slightly for exploration
-                if random.random() < 0.01:
-                    self.seeking_mate_direction += random.uniform(-0.5, 0.5)
-                # If at map edge, change direction
-                hit_edge = False
-                if self.x <= 0 or self.x >= MAP_WIDTH:
-                    hit_edge = True
-                if self.y <= 0 or self.y >= MAP_HEIGHT:
-                    hit_edge = True
-                if hit_edge:
-                    self.seeking_mate_direction = random.uniform(0, 2 * math.pi)
-                # Clamp to map bounds
-                self.x = max(0, min(MAP_WIDTH, self.x))
-                self.y = max(0, min(MAP_HEIGHT, self.y))
-                return True
+                mate_target = None
+                for other in creatures:
+                    if other is self or {self.sex, other.sex} != {'M', 'F'}:
+                        continue
+                    if other.hunger < 70 or other.thirst < 70:
+                        continue
+                    if self.sex == 'M' and pygame.time.get_ticks() < other.gestation_timer:
+                        continue
+                    if self.attractiveness * age_factor < other.threshold or other.attractiveness * age_factor < self.threshold:
+                        continue
+                    other_age_pct = other.age / other.max_age
+                    if other_age_pct < 0.25 or other_age_pct > 0.75:
+                        continue
+                    if math.hypot(other.x - self.x, other.y - self.y) <= effective_vision:
+                        mate_target = other
+                        break
+                if mate_target:
+                    target = mate_target
+                else:
+                    # Move in a persistent direction while seeking mate
+                    self.x += math.cos(self.seeking_mate_direction) * effective_speed
+                    self.y += math.sin(self.seeking_mate_direction) * effective_speed
+                    # Occasionally change direction slightly for exploration
+                    if random.random() < 0.01:
+                        self.seeking_mate_direction += random.uniform(-0.5, 0.5)
+                    # If at map edge, change direction
+                    hit_edge = False
+                    if self.x <= 0 or self.x >= MAP_WIDTH:
+                        hit_edge = True
+                    if self.y <= 0 or self.y >= MAP_HEIGHT:
+                        hit_edge = True
+                    if hit_edge:
+                        self.seeking_mate_direction = random.uniform(0, 2 * math.pi)
+                    # Clamp to map bounds
+                    self.x = max(0, min(MAP_WIDTH, self.x))
+                    self.y = max(0, min(MAP_HEIGHT, self.y))
+                    return True
+        # If loyal mate, bias movement toward mate if not close
+        if mate_target is not None:
+            dx, dy = mate_target.x - self.x, mate_target.y - self.y
+            dist = math.hypot(dx, dy)
+            if dist > 0:
+                self.x += (dx / dist) * effective_speed * 0.5  # Move halfway toward mate
+                self.y += (dy / dist) * effective_speed * 0.5
         # Handle combat
         contested = False
         for c in creatures:
@@ -410,24 +503,63 @@ class Creature:
                         self.y += (dy / dist) * effective_speed
                     contested = True
                     break
-                if random.random() < effective_aggression:
-                    damage = max(0, effective_attack - c.defense)
-                    if damage > 0:
-                        was_alive = c.health > 0
-                        c.health -= damage
-                        if was_alive and c.health <= 0:
-                            self.kill_count += 1
-                            global_total_kills += 1
-                    else:
-                        if random.random() < c.aggression:
-                            retaliation = max(0, c.attack - effective_defense)
-                            if retaliation > 0:
-                                was_alive = self.health > 0
-                                self.health -= retaliation
-                                if was_alive and self.health <= 0:
-                                    c.kill_count += 1
-                                    global_total_kills += 1
-                        contested = True
+                # Ethereal creatures cannot attack or be attacked
+                if "Ethereal" in self.mutations or "Ethereal" in c.mutations:
+                    contested = True
+                    break
+                # Burrowed creatures cannot be attacked
+                if hasattr(c, '_burrowed_until') and getattr(c, '_burrowed_until', 0) > pygame.time.get_ticks():
+                    contested = True
+                    break
+                # Slippery Skin: 50% chance to evade
+                if handle_slippery_skin(c):
+                    contested = True
+                    break
+                # Dominant: boost attack/defense if fighting non-dominant
+                dom_attack_mult, dom_def_mult = handle_dominant(self, c)
+                dom_attack_mult2, dom_def_mult2 = handle_dominant(c, self)
+                dom_attack = effective_attack * dom_attack_mult
+                dom_defense = c.defense * dom_def_mult2
+                damage = max(0, dom_attack - dom_defense)
+                if damage > 0:
+                    was_alive = c.health > 0
+                    c.health -= damage
+                    if was_alive and c.health <= 0:
+                        self.kill_count += 1
+                        global_total_kills += 1
+                        handle_cannibal(self, c)
+                        trigger_blood_frenzy(self)
+                    # Venom Glands: poison the target
+                    trigger_venom_glands(self, c)
+                    # Tail Whip retaliation
+                    handle_tail_whip(c, self)
+                    # Poisonous Blood retaliation
+                    handle_poisonous_blood(c, self)
+                    # Bone Spikes retaliation
+                    if "Bone Spikes" in c.mutations and self.health > 0 and "Ethereal" not in self.mutations:
+                        self.health -= 2
+                else:
+                    if random.random() < c.aggression:
+                        retaliation = max(0, c.attack - effective_defense)
+                        if retaliation > 0:
+                            was_alive = self.health > 0
+                            self.health -= retaliation
+                            if was_alive and self.health <= 0:
+                                c.kill_count += 1
+                                global_total_kills += 1
+                                print(f"Random attack retaliation! {c.sex} killed {self.sex}. Total kills: {global_total_kills}")
+                                handle_cannibal(c, self)
+                                trigger_blood_frenzy(c)
+                            # Venom Glands: poison the target
+                            trigger_venom_glands(c, self)
+                            # Tail Whip retaliation
+                            handle_tail_whip(self, c)
+                            # Poisonous Blood retaliation
+                            handle_poisonous_blood(self, c)
+                            # Bone Spikes retaliation
+                            if "Bone Spikes" in self.mutations and c.health > 0 and "Ethereal" not in c.mutations:
+                                c.health -= 2
+                contested = True
         # Die if health reaches 0
         if self.health <= 0:
             return False
@@ -444,13 +576,27 @@ class Creature:
         self.random_attack(creatures, effective_aggression, effective_attack, effective_defense)
         
         # Eat and reproduce
-        self.eat(foods, waters)
+        ate_child = False
+        ate_pregnant = False
+        if "Child Eater" in self.mutations:
+            from mutations import handle_child_eater
+            ate_child = handle_child_eater(self, creatures)
+        if "Pregnancy hunter" in self.mutations and not ate_child:
+            from mutations import handle_pregnancy_hunter
+            ate_pregnant = handle_pregnancy_hunter(self, creatures)
+        if not ate_child and not ate_pregnant:
+            self.eat(foods, waters)
         self.reproduce(creatures, age_factor=age_factor)
+        handle_pack_mentality(self, creatures, get_biome)
         return True
 
     def move_random(self, speed_override=None):
         angle = random.uniform(0, 2 * math.pi)
         speed_mod = speed_override if speed_override is not None else self.speed
+        # Springy Tendons: jump
+        _, springy_jump = handle_springy_tendons(self)
+        if springy_jump:
+            speed_mod *= 2
         self.x += math.cos(angle) * speed_mod
         self.y += math.sin(angle) * speed_mod
 
@@ -459,6 +605,10 @@ class Creature:
         dist = math.hypot(dx, dy)
         if dist > 0:
             speed_mod = speed_override if speed_override is not None else self.speed
+            # Springy Tendons: jump
+            _, springy_jump = handle_springy_tendons(self)
+            if springy_jump:
+                speed_mod *= 2
             self.x += (dx / dist) * speed_mod
             self.y += (dy / dist) * speed_mod
 
@@ -473,15 +623,21 @@ class Creature:
         # Skip if this creature is a child or pregnant
         if self.age < self.maturity_age:
             return
-        
         # Check for nearby creatures to attack
         for other in creatures:
             if other is self:
                 continue
-            
+            # Ethereal creatures cannot attack or be attacked
+            if "Ethereal" in self.mutations or "Ethereal" in other.mutations:
+                continue
+            # Burrowed creatures cannot be attacked
+            if hasattr(other, '_burrowed_until') and getattr(other, '_burrowed_until', 0) > pygame.time.get_ticks():
+                continue
+            # Slippery Skin: 50% chance to evade
+            if handle_slippery_skin(other):
+                continue
             # Calculate distance to other creature
             distance = math.hypot(other.x - self.x, other.y - self.y)
-            
             # Only attack if within attack range (vision radius)
             if distance <= self.vision:
                 # Chance to attack based on aggression level
@@ -496,6 +652,17 @@ class Creature:
                             self.kill_count += 1
                             global_total_kills += 1
                             print(f"Random attack kill! {self.sex} killed {other.sex}. Total kills: {global_total_kills}")
+                            handle_cannibal(self, other)
+                            trigger_blood_frenzy(self)
+                        # Venom Glands: poison the target
+                        trigger_venom_glands(self, other)
+                        # Tail Whip retaliation
+                        handle_tail_whip(other, self)
+                        # Poisonous Blood retaliation
+                        handle_poisonous_blood(other, self)
+                        # Bone Spikes retaliation
+                        if "Bone Spikes" in other.mutations and self.health > 0 and "Ethereal" not in self.mutations:
+                            self.health -= 2
                     else:
                         # If attack fails, other creature might retaliate
                         if random.random() < other.aggression * 0.2:  # 20% of other's aggression
@@ -507,6 +674,17 @@ class Creature:
                                     other.kill_count += 1
                                     global_total_kills += 1
                                     print(f"Random attack retaliation! {other.sex} killed {self.sex}. Total kills: {global_total_kills}")
+                                    handle_cannibal(other, self)
+                                    trigger_blood_frenzy(other)
+                                # Venom Glands: poison the target
+                                trigger_venom_glands(other, self)
+                                # Tail Whip retaliation
+                                handle_tail_whip(self, other)
+                                # Poisonous Blood retaliation
+                                handle_poisonous_blood(self, other)
+                                # Bone Spikes retaliation
+                                if "Bone Spikes" in self.mutations and other.health > 0 and "Ethereal" not in other.mutations:
+                                    other.health -= 2
 
     def eat(self, foods, waters):
         for food in foods:
@@ -553,15 +731,33 @@ class Creature:
                 if random.uniform(0, 100) < infertility_chance:
                     # Mating fails
                     return
-                # Store pending offspring for birth after gestation
-                mother.pending_offspring.append((father, mother.offspring_count))
+                # Prevent breeding between creatures with "Pack mentality" if they are in different packs
+                if "Pack mentality" in self.mutations and "Pack mentality" in other.mutations:
+                    if hasattr(self, 'pack_id') and hasattr(other, 'pack_id'):
+                        if self.pack_id != other.pack_id:
+                            continue  # Only breed within the same pack
+                # Twin Gene: double offspring, skip cost if present
+                base_offspring = mother.offspring_count
+                offspring_count, skip_cost = handle_twin_gene(mother, father, base_offspring)
+                # Brood Sac: increase offspring, gestation=0 if present
+                offspring_count, brood_gestation = handle_brood_sac(mother, offspring_count)
+                mother.pending_offspring.append((father, offspring_count))
                 # Cost scales with offspring count, applied to both parents
-                cost = mother.offspring_count * 10  # 10 units per offspring (adjust as needed)
-                mother.hunger = max(0, mother.hunger - cost)
-                mother.thirst = max(0, mother.thirst - cost)
-                father.hunger = max(0, father.hunger - cost)
-                father.thirst = max(0, father.thirst - cost)
-                mother.gestation_timer = pygame.time.get_ticks() + mother.gestation_duration
+                if not skip_cost:
+                    cost = offspring_count * 10  # 10 units per offspring (adjust as needed)
+                    mother.hunger = max(0, mother.hunger - cost)
+                    mother.thirst = max(0, mother.thirst - cost)
+                    father.hunger = max(0, father.hunger - cost)
+                    father.thirst = max(0, father.thirst - cost)
+                # Loyal Mate: assign mates and halve gestation time
+                if "Loyal Mate" in mother.mutations or "Loyal Mate" in father.mutations:
+                    set_loyal_mates(mother, father)
+                    mother.gestation_duration = max(1000, mother.gestation_duration // 2)
+                # Brood Sac: gestation is 0 (spawn immediately)
+                if brood_gestation == 0:
+                    mother.gestation_timer = pygame.time.get_ticks()  # Immediate birth
+                else:
+                    mother.gestation_timer = pygame.time.get_ticks() + mother.gestation_duration
                 break
 
     def make_offspring(self, partner):
@@ -577,7 +773,43 @@ class Creature:
         max_health_avg = (self.max_health + partner.max_health) / 2
         child_max_health = int(max(1, min(100, mutate(max_health_avg, 0.1))))
 
-        child = Creature(x=self.x, y=self.y, hue=mutate(hue_avg, 0.1), max_health=child_max_health)
+        # Inherit mutations
+        child_mutations = set(self.mutations)
+        if "Pack mentality" in self.mutations or "Pack mentality" in partner.mutations:
+            child_mutations.add("Pack mentality")
+        # Fragmented DNA: extra mutation gain/loss for offspring
+        fragmented = "Fragmented DNA" in self.mutations or "Fragmented DNA" in partner.mutations
+        if fragmented:
+            # Add 2-4 extra random mutations
+            possible_new = set(MUTATIONS.keys()) - child_mutations
+            for _ in range(random.randint(2, 4)):
+                if possible_new:
+                    new_mut = random.choice(list(possible_new))
+                    child_mutations.add(new_mut)
+                    possible_new.remove(new_mut)
+            # Remove 1-2 inherited mutations (not forbidden)
+            forbidden = {"Pack mentality", "Immortal", "Fragmented DNA"}
+            removable = [m for m in child_mutations if m not in forbidden]
+            for _ in range(random.randint(1, 2)):
+                if removable:
+                    lost = random.choice(removable)
+                    child_mutations.remove(lost)
+                    removable.remove(lost)
+        else:
+            # Add 1-2 new random mutations for testing
+            possible_new = set(MUTATIONS.keys()) - child_mutations
+            for _ in range(random.randint(1, 2)):
+                if possible_new:
+                    new_mut = random.choice(list(possible_new))
+                    child_mutations.add(new_mut)
+                    possible_new.remove(new_mut)
+        # Child starts with no pack_id (will form/join on its own)
+        child = Creature(x=self.x, y=self.y, hue=mutate(hue_avg, 0.1), max_health=child_max_health, mutations=child_mutations)
+        if hasattr(child, 'pack_id'):
+            child.pack_id = None
+        if hasattr(child, 'pack_color'):
+            child.pack_color = None
+
         child.speed = mutate((self.speed + partner.speed) / 2, 0.1)
         child.vision = max(1, int(mutate((self.vision + partner.vision) / 2, 0.1)))
         child.offspring_count = max(1, min(5, int(mutate((self.offspring_count + partner.offspring_count) / 2, 0.1))))
@@ -600,10 +832,70 @@ class Creature:
 
     def draw(self):
         pos = world_to_screen(self.x, self.y)
+        biolum_color = None
+        if "Bioluminescent" in self.mutations:
+            _, biolum_color = handle_bioluminescent(self, is_daytime)
         # Only draw if on screen
         if -CREATURE_RADIUS <= pos[0] <= screen.get_width() + CREATURE_RADIUS and \
                 -CREATURE_RADIUS <= pos[1] <= screen.get_height() + CREATURE_RADIUS:
-            pygame.draw.circle(screen, self.color, pos, int(CREATURE_RADIUS * 1.5 * zoom))
+            # Draw glowing outline for pack members
+            if hasattr(self, 'pack_id') and self.pack_id is not None and self.pack_color is not None:
+                for glow_radius in range(int(CREATURE_RADIUS * 2.5 * zoom), int(CREATURE_RADIUS * 1.5 * zoom), -2):
+                    alpha = max(30, 120 - (glow_radius - int(CREATURE_RADIUS * 1.5 * zoom)) * 10)
+                    glow_surf = pygame.Surface((glow_radius*2, glow_radius*2), pygame.SRCALPHA)
+                    pygame.draw.circle(glow_surf, self.pack_color + (alpha,), (glow_radius, glow_radius), glow_radius)
+                    screen.blit(glow_surf, (pos[0] - glow_radius, pos[1] - glow_radius), special_flags=pygame.BLEND_RGBA_ADD)
+            # Ethereal visual: semi-transparent overlay
+            if "Ethereal" in self.mutations:
+                ethereal_surf = pygame.Surface((int(CREATURE_RADIUS*3*zoom), int(CREATURE_RADIUS*3*zoom)), pygame.SRCALPHA)
+                pygame.draw.circle(ethereal_surf, self.color + (120,), (int(CREATURE_RADIUS*1.5*zoom), int(CREATURE_RADIUS*1.5*zoom)), int(CREATURE_RADIUS*1.5*zoom))
+                screen.blit(ethereal_surf, (pos[0] - int(CREATURE_RADIUS*1.5*zoom), pos[1] - int(CREATURE_RADIUS*1.5*zoom)))
+            # Blood Frenzy visual: red glow
+            elif hasattr(self, '_blood_frenzy') and self._blood_frenzy > pygame.time.get_ticks():
+                frenzy_surf = pygame.Surface((int(CREATURE_RADIUS*3*zoom), int(CREATURE_RADIUS*3*zoom)), pygame.SRCALPHA)
+                pygame.draw.circle(frenzy_surf, (255,30,30,160), (int(CREATURE_RADIUS*1.5*zoom), int(CREATURE_RADIUS*1.5*zoom)), int(CREATURE_RADIUS*1.5*zoom))
+                screen.blit(frenzy_surf, (pos[0] - int(CREATURE_RADIUS*1.5*zoom), pos[1] - int(CREATURE_RADIUS*1.5*zoom)))
+                pygame.draw.circle(screen, self.color, pos, int(CREATURE_RADIUS * 1.5 * zoom))
+            # Rage State visual: red overlay during rage
+            elif hasattr(self, '_rage_state') and self._rage_state == 'rage':
+                rage_surf = pygame.Surface((int(CREATURE_RADIUS*3*zoom), int(CREATURE_RADIUS*3*zoom)), pygame.SRCALPHA)
+                pygame.draw.circle(rage_surf, (255,0,0,120), (int(CREATURE_RADIUS*1.5*zoom), int(CREATURE_RADIUS*1.5*zoom)), int(CREATURE_RADIUS*1.5*zoom))
+                screen.blit(rage_surf, (pos[0] - int(CREATURE_RADIUS*1.5*zoom), pos[1] - int(CREATURE_RADIUS*1.5*zoom)))
+                pygame.draw.circle(screen, self.color, pos, int(CREATURE_RADIUS * 1.5 * zoom))
+            # Burrower visual: brown overlay if burrowed
+            elif hasattr(self, '_burrowed_until') and self._burrowed_until > pygame.time.get_ticks():
+                burrow_surf = pygame.Surface((int(CREATURE_RADIUS*3*zoom), int(CREATURE_RADIUS*3*zoom)), pygame.SRCALPHA)
+                pygame.draw.circle(burrow_surf, (139,69,19,120), (int(CREATURE_RADIUS*1.5*zoom), int(CREATURE_RADIUS*1.5*zoom)), int(CREATURE_RADIUS*1.5*zoom))
+                screen.blit(burrow_surf, (pos[0] - int(CREATURE_RADIUS*1.5*zoom), pos[1] - int(CREATURE_RADIUS*1.5*zoom)))
+                pygame.draw.circle(screen, self.color, pos, int(CREATURE_RADIUS * 1.5 * zoom))
+            # Bioluminescent visual: colored glow at night
+            elif biolum_color is not None:
+                biolum_surf = pygame.Surface((int(CREATURE_RADIUS*3*zoom), int(CREATURE_RADIUS*3*zoom)), pygame.SRCALPHA)
+                pygame.draw.circle(biolum_surf, biolum_color + (120,), (int(CREATURE_RADIUS*1.5*zoom), int(CREATURE_RADIUS*1.5*zoom)), int(CREATURE_RADIUS*1.5*zoom))
+                screen.blit(biolum_surf, (pos[0] - int(CREATURE_RADIUS*1.5*zoom), pos[1] - int(CREATURE_RADIUS*1.5*zoom)))
+                pygame.draw.circle(screen, self.color, pos, int(CREATURE_RADIUS * 1.5 * zoom))
+            # --- Parasitic Womb host visual: parasite.png icon above health bar ---
+            if hasattr(self, '_parasitic_hosted_by') and self._parasitic_hosted_by:
+                if not hasattr(self, '_parasite_icon'):
+                    self._parasite_icon = pygame.image.load('parasite.png')
+                    self._parasite_icon = pygame.transform.smoothscale(self._parasite_icon, (20, 20))
+                icon_x = pos[0] - 10  # Centered above health bar
+                icon_y = pos[1] - int(10 * zoom) - 24  # Above health bar
+                screen.blit(self._parasite_icon, (icon_x, icon_y))
+            # Slippery Skin visual: blue flash
+            if hasattr(self, '_slippery_flash') and self._slippery_flash:
+                flash_surf = pygame.Surface((int(CREATURE_RADIUS*3*zoom), int(CREATURE_RADIUS*3*zoom)), pygame.SRCALPHA)
+                pygame.draw.circle(flash_surf, (80,200,255,180), (int(CREATURE_RADIUS*1.5*zoom), int(CREATURE_RADIUS*1.5*zoom)), int(CREATURE_RADIUS*1.5*zoom))
+                screen.blit(flash_surf, (pos[0] - int(CREATURE_RADIUS*1.5*zoom), pos[1] - int(CREATURE_RADIUS*1.5*zoom)))
+                self._slippery_flash = False
+            # Tail Whip visual: magenta flash
+            if hasattr(self, '_tailwhip_flash') and self._tailwhip_flash:
+                flash_surf = pygame.Surface((int(CREATURE_RADIUS*3*zoom), int(CREATURE_RADIUS*3*zoom)), pygame.SRCALPHA)
+                pygame.draw.circle(flash_surf, (255,0,255,180), (int(CREATURE_RADIUS*1.5*zoom), int(CREATURE_RADIUS*1.5*zoom)), int(CREATURE_RADIUS*1.5*zoom))
+                screen.blit(flash_surf, (pos[0] - int(CREATURE_RADIUS*1.5*zoom), pos[1] - int(CREATURE_RADIUS*1.5*zoom)))
+                self._tailwhip_flash = False
+            else:
+                pygame.draw.circle(screen, self.color, pos, int(CREATURE_RADIUS * 1.5 * zoom))
 
             # Draw health bar
             bar_width = int(20 * zoom)
@@ -734,6 +1026,7 @@ try:
     running = True
     while running:
         screen.fill(BLACK)
+        update_day_night()
 
         # Draw biome visualization
         biome_colors = {
@@ -815,10 +1108,29 @@ try:
                     selected_creature = None
             else:
                 c.draw()
+            # Always check for all mutation behaviors
+            handle_child_eater(c, creatures)
+            handle_pack_mentality(c, creatures, get_biome, foods)
+            handle_radioactive(c, creatures)
+            handle_pregnancy_hunter(c, creatures)
+            # Regen Core: heal if not poisoned
+            handle_regen_core(c)
+            # Cowardly: always flee, set aggression to 0
+            cowardly_threat = handle_cowardly(c, creatures)
+            if cowardly_threat is not None:
+                dx, dy = c.x - cowardly_threat.x, c.y - cowardly_threat.y
+                dist = math.hypot(dx, dy)
+                if dist > 0:
+                    c.x += (dx / dist) * c.speed
+                    c.y += (dy / dist) * c.speed
+                c.x = max(0, min(MAP_WIDTH, c.x))
+                c.y = max(0, min(MAP_HEIGHT, c.y))
+                c.aggression = 0 # Set aggression to 0 when fleeing
 
         # Draw selected creature info
         if selected_creature and selected_creature in creatures:
             lines = [
+                f"ID: {selected_creature.unique_id}",
                 f"Sex: {selected_creature.sex}",
                 f"Age: {int(selected_creature.age/1000)}s / {int(selected_creature.max_age/1000)}s",
                 f"Speed: {selected_creature.speed:.2f}",
@@ -834,6 +1146,11 @@ try:
                 f"Kills: {selected_creature.kill_count}",
                 f"Infertility: {selected_creature.infertility}"
             ]
+            # Add mutations to the stat panel
+            lines.append(f"Mutations: {', '.join(selected_creature.mutations) if selected_creature.mutations else 'None'}")
+            # Add pack status to the stat panel
+            if hasattr(selected_creature, 'pack_id') and selected_creature.pack_id is not None:
+                lines.append(f"Pack: True (ID: {selected_creature.pack_id})")
             if selected_creature.sex == 'F' and pygame.time.get_ticks() < selected_creature.gestation_timer:
                 remaining = max(0, (selected_creature.gestation_timer - pygame.time.get_ticks()) // 1000)
                 lines.append(f"Pregnant ({remaining}s left)")
@@ -869,8 +1186,20 @@ try:
             if stats_panel is not None:
                 screen.blit(stats_panel, (screen.get_width() - 310, 10))
 
+        # Draw day/night icon in bottom right corner
+        icon_x = screen.get_width() - icon_size - 20
+        icon_y = screen.get_height() - icon_size - 40
+        if is_daytime:
+            screen.blit(sun_icon, (icon_x, icon_y))
+            label = BIG_FONT.render('Day', True, (255, 255, 100))
+        else:
+            screen.blit(moon_icon, (icon_x, icon_y))
+            label = BIG_FONT.render('Night', True, (255, 255, 180))
+        screen.blit(label, (icon_x + icon_size//2 - label.get_width()//2, icon_y + icon_size + 2))
+
         # Draw instructions
         instructions = [
+            f"Time: {'Day' if is_daytime else 'Night'}",
             "Click: Select creature",
             "ESC: Deselect",
             "S: Toggle stats",
