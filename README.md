@@ -147,11 +147,23 @@ Visual lineage trees
 
 Environmental hazards and disease
 
-Climate-based migration patterns
+Weather in the different biomes
 
-Online ecosystem competition
+Dominant and recessive genotyping
 
-User-defined mutation editing
+Expanded set of creatures with varying behaviors that interact
+
+Improved AI for creatures
+
+UI Beautification
+
+Graphical overhaul
+
+Graphical representation and variation of traits and mutation
+
+Climate-based migration patterns?
+
+User-defined biomes and more user input to the simulation
 
 #📚 Files
 
