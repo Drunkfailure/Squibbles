@@ -145,7 +145,7 @@ Parasitic womb chains infecting entire populations
 
 Visual lineage trees
 
-Different foods that provide more/less hunger, other uniqueness.
+Different foods that provide more/less hunger, other uniqueness. IE: Fruit trees, berries, cactus etc.
 
 Environmental hazards and disease
 
