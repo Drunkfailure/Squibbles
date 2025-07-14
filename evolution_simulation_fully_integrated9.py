@@ -41,11 +41,10 @@ zoom = 1.0
 zoom_step = 0.1
 
 # Global variables - initialize with defaults
-CREATURE_COUNT = 50
-FOOD_COUNT = 30
-WATER_COUNT = 30
+CREATURE_COUNT = 300
+FOOD_COUNT = 500
 MAP_WIDTH = 1000
-MAP_HEIGHT = 800
+MAP_HEIGHT = 1000
 global_total_kills = 0
 
 # Day/night cycle
@@ -54,12 +53,27 @@ NIGHT_LENGTH_MS = 30000  # 30 seconds night
 is_daytime = True
 last_cycle_switch = pygame.time.get_ticks()
 
+# Track simulation start time for amnesty
+SIM_START_TIME = pygame.time.get_ticks()
+
+# --- Pack tracking ---
+pack_registry = {}  # pack_id: set of living member unique_ids
+pack_founders = {}  # pack_id: set of original founder unique_ids
+
 def update_day_night():
     global is_daytime, last_cycle_switch
     now = pygame.time.get_ticks()
     if is_daytime and now - last_cycle_switch > DAY_LENGTH_MS:
         is_daytime = False
         last_cycle_switch = now
+        # Instantly kill any creature in the part of a pond that overlaps tundra (precise check)
+        for c in creatures[:]:
+            for pond in ponds:
+                if math.hypot(c.x - pond.x, c.y - pond.y) < pond.radius:
+                    # Only kill if this spot is tundra
+                    if get_biome(c.x, c.y) == Biome.TUNDRA:
+                        c.health = 0
+                        break
     elif not is_daytime and now - last_cycle_switch > NIGHT_LENGTH_MS:
         is_daytime = True
         last_cycle_switch = now
@@ -67,27 +81,21 @@ def update_day_night():
 
 # Setup menu values (modifies globals)
 def show_setup_menu():
-    global CREATURE_COUNT, FOOD_COUNT, WATER_COUNT, MAP_WIDTH, MAP_HEIGHT
+    global CREATURE_COUNT, FOOD_COUNT, MAP_WIDTH, MAP_HEIGHT
     print("Evolution Simulation Setup")
     print("(Press Enter for default values)")
 
     try:
-        user_input = input("Number of creatures (1-1000) [50]: ").strip()
-        CREATURE_COUNT = max(1, min(1000, int(user_input))) if user_input else 50
+        user_input = input("Number of creatures (1-1000) [300]: ").strip()
+        CREATURE_COUNT = max(1, min(1000, int(user_input))) if user_input else 300
     except ValueError:
-        CREATURE_COUNT = 50
+        CREATURE_COUNT = 300
 
     try:
-        user_input = input("Number of food spawns (1-500) [30]: ").strip()
-        FOOD_COUNT = max(1, min(500, int(user_input))) if user_input else 30
+        user_input = input("Number of food spawns (1-500) [500]: ").strip()
+        FOOD_COUNT = max(1, min(500, int(user_input))) if user_input else 500
     except ValueError:
-        FOOD_COUNT = 30
-
-    try:
-        user_input = input("Number of water spawns (1-500) [30]: ").strip()
-        WATER_COUNT = max(1, min(500, int(user_input))) if user_input else 30
-    except ValueError:
-        WATER_COUNT = 30
+        FOOD_COUNT = 500
 
     try:
         user_input = input("Map width (500-2000) [1000]: ").strip()
@@ -96,10 +104,10 @@ def show_setup_menu():
         MAP_WIDTH = 1000
 
     try:
-        user_input = input("Map height (500-2000) [800]: ").strip()
-        MAP_HEIGHT = max(500, min(2000, int(user_input))) if user_input else 800
+        user_input = input("Map height (500-2000) [1000]: ").strip()
+        MAP_HEIGHT = max(500, min(2000, int(user_input))) if user_input else 1000
     except ValueError:
-        MAP_HEIGHT = 800
+        MAP_HEIGHT = 1000
 
     # Reset global kill counter on new simulation
     # Set global_total_kills = 0 at the module level after this function
@@ -175,6 +183,35 @@ def get_biome(x, y):
 # Generate biome map after setup
 biome_map = generate_biomes(MAP_WIDTH, MAP_HEIGHT)
 
+# --- Pond generation ---
+class Pond:
+    def __init__(self, x, y, radius):
+        self.x = x
+        self.y = y
+        self.radius = radius
+
+# Limit number of ponds to a reasonable value based on map size
+min_ponds = 2
+max_ponds = max(4, min(12, (MAP_WIDTH * MAP_HEIGHT) // 150000))  # e.g., 4-12 for small to large maps
+num_ponds = random.randint(min_ponds, max_ponds)
+ponds = []
+for _ in range(num_ponds):
+    # Plains: 60% chance, Rainforest: 25%, Tundra: 10%, Desert: 5%
+    while True:
+        x = random.randint(0, MAP_WIDTH)
+        y = random.randint(0, MAP_HEIGHT)
+        biome = get_biome(x, y)
+        if biome == Biome.PLAINS and random.random() < 0.6:
+            break
+        elif biome == Biome.RAINFOREST and random.random() < 0.25:
+            break
+        elif biome == Biome.TUNDRA and random.random() < 0.1:
+            break
+        elif biome == Biome.DESERT and random.random() < 0.05:
+            break
+    radius = random.randint(30, 60)  # Ponds are 30-60px radius
+    ponds.append(Pond(x, y, radius))
+
 ###########################
 # Entities
 class Respawnable:
@@ -228,39 +265,6 @@ class Food(Respawnable):
             self.spawn_x, self.spawn_y = self.x, self.y
 
 
-class Water(Respawnable):
-    def get_respawn_delay(self):
-        return 5000  # faster respawn for water
-
-    def draw(self):
-        if self.active:
-            pos = world_to_screen(self.x, self.y)
-            size = max(2, int(2 * zoom))
-            pygame.draw.rect(screen, (0, 0, 255), (pos[0] - size//2, pos[1] - size//2, size, size))
-
-    def __init__(self):
-        super().__init__()
-        # Place water based on biome
-        placed = False
-        for _ in range(10):
-            x = random.randint(0, MAP_WIDTH)
-            y = random.randint(0, MAP_HEIGHT)
-            biome = get_biome(x, y)
-            if biome == Biome.DESERT and random.random() < 0.8:
-                continue  # Scarce in desert
-            if biome == Biome.RAINFOREST and random.random() < 0.3:
-                continue  # Plentiful in rainforest
-            if biome == Biome.TUNDRA and random.random() < 0.3:
-                continue  # More plentiful than desert, less than plains
-            self.x, self.y = x, y
-            self.spawn_x, self.spawn_y = x, y
-            placed = True
-            break
-        if not placed:
-            self.x, self.y = random.randint(0, MAP_WIDTH), random.randint(0, MAP_HEIGHT)
-            self.spawn_x, self.spawn_y = self.x, self.y
-
-
 class Creature:
     _id_counter = 1
     def __init__(self, x=None, y=None, hue=None, max_health=None, mutations=None, pack_id=None, pack_color=None):
@@ -268,9 +272,24 @@ class Creature:
         Creature._id_counter += 1
         self.kill_count = 0
         self.mutations = list(mutations) if mutations else []
-        # Make mutations extremely rare: 1% chance for a single random mutation
-        if not mutations and random.random() < 0.01:
-            self.mutations = [random.choice(list(MUTATIONS.keys()))]
+        # Make mutations extremely rare: 0.01% chance for a single random mutation
+        if not mutations:
+            mega_rare_mutations = {
+                'Pack mentality', 'Immortal', 'Cannibal', 'Radioactive', 'Ethereal', 'Pregnancy hunter',
+                'Fragmented DNA', 'Rage State', 'Blood Frenzy', 'Thermal Core', 'Brood Sac',
+                'Color Pulse', 'Parasitic Womb', 'Null Core'
+            }
+            mutation_choices = list(MUTATIONS.keys())
+            # Mega rare: 0.0000001% chance, others: 0.00001% chance
+            roll = random.random()
+            if roll < 0.000000001:  # 0.0000001% mega rare
+                mega_rare = [m for m in mutation_choices if m in mega_rare_mutations]
+                if mega_rare:
+                    self.mutations = [random.choice(mega_rare)]
+            elif roll < 0.0000001:  # 0.00001% for all other mutations
+                normal = [m for m in mutation_choices if m not in mega_rare_mutations]
+                if normal:
+                    self.mutations = [random.choice(normal)]
         self.pack_id = pack_id
         self.pack_color = pack_color
         # Position - random within map bounds
@@ -319,8 +338,11 @@ class Creature:
         self.mother_id = None  # For Territorial/offspring logic
         self._parasitic_infecting = False  # For Parasitic Womb
         self._parasitic_hosted_by = None # For Parasitic Womb host
+        self._wet_until = 0  # Timestamp until which the creature is wet
+        self._last_swim_time = 0
+        self._avoid_tundra_until = 0
 
-    def update(self, foods, waters, creatures):
+    def update(self, foods, creatures):
         global global_total_kills
         # Call mutation handlers for per-frame effects
         handle_fragmented_dna(self)
@@ -337,11 +359,14 @@ class Creature:
         # Age update
         self.age += clock.get_time()  # ms per frame
         # Age scaling factor
-        if self.age < self.maturity_age:
-            age_factor = 0.75 + 0.25 * (self.age / self.maturity_age)
-        else:
-            age_factor = 1.0 - 0.5 * ((self.age - self.maturity_age) / (self.max_age - self.maturity_age))
+        age_pct = self.age / self.max_age
+        if age_pct < 0.10:
+            age_factor = 0.75 + 0.25 * (age_pct / 0.10)
+        elif age_pct > 0.90:
+            age_factor = 1.0 - 0.5 * ((age_pct - 0.90) / 0.10)
             age_factor = max(0.5, age_factor)
+        else:
+            age_factor = 1.0
         # Pregnant check
         is_pregnant = self.sex == 'F' and pygame.time.get_ticks() < self.gestation_timer
         # Bioluminescent: boost attractiveness at night, get glow color
@@ -355,6 +380,18 @@ class Creature:
         if biome == Biome.TUNDRA:
             biome_speed_penalty = 0.7  # 30% slower in tundra
             biome_vision_penalty = 0.7  # 30% less vision in tundra
+        # --- Pond movement penalty ---
+        in_pond = any(math.hypot(self.x - pond.x, self.y - pond.y) < pond.radius for pond in ponds)
+        in_frozen_pond = False
+        if in_pond and not is_daytime:
+            for pond in ponds:
+                if math.hypot(self.x - pond.x, self.y - pond.y) < pond.radius:
+                    if get_biome(self.x, self.y) == Biome.TUNDRA:
+                        in_frozen_pond = True
+                        # Do NOT kill if walking onto frozen pond after nightfall
+                        break
+        if in_pond and not in_frozen_pond:
+            biome_speed_penalty *= 0.5  # 50% slower in pond
         # Hyperaware: double vision, flee from threats
         hyperaware_mult, hyperaware_threat = handle_hyperaware(self, creatures)
         # Paranoia: flee from any non-pack, non-mate creature
@@ -387,11 +424,8 @@ class Creature:
             self.x = max(0, min(MAP_WIDTH, self.x))
             self.y = max(0, min(MAP_HEIGHT, self.y))
             return True
-        # Die if hunger or thirst reaches 0 or age exceeds max_age
-        if self.hunger <= 0 or self.thirst <= 0 or self.age >= self.max_age:
-            # Immortal mutation prevents death from these causes
-            if handle_immortal(self):
-                return True
+        # Remove creature if health is zero or below
+        if self.health <= 0:
             return False
         # If burrowed, skip movement, attacking, and make invulnerable
         if burrowed:
@@ -399,20 +433,20 @@ class Creature:
             self.x = max(0, min(MAP_WIDTH, self.x))
             self.y = max(0, min(MAP_HEIGHT, self.y))
             # Still drain hunger/thirst, age, and allow eating/reproducing
-            self.eat(foods, waters)
+            self.eat(foods)
             self.reproduce(creatures, age_factor=age_factor)
             handle_pack_mentality(self, creatures, get_biome)
             return True
         # Find targets (use effective_vision)
         food_target = self.find_nearest(foods, vision_override=effective_vision)
-        water_target = self.find_nearest(waters, vision_override=effective_vision)
+        pond_target = self.find_nearest_pond(ponds, vision_override=effective_vision) if self.thirst < 70 else None
         target = None
-        # If hungry or thirsty, seek food/water and do not move randomly
+        # If hungry or thirsty, seek food or pond and do not move randomly
         if self.hunger < 70 or self.thirst < 70:
             if self.hunger < self.thirst and food_target:
                 target = food_target
-            elif water_target:
-                target = water_target
+            elif pond_target:
+                target = pond_target
             elif food_target:
                 target = food_target
             else:
@@ -495,7 +529,7 @@ class Creature:
                     contested = True
                     break
                 # Child creatures are much more likely to flee and less likely to be aggressive
-                if self.age < self.maturity_age:
+                if age_pct < 0.10:
                     dx, dy = self.x - c.x, self.y - c.y
                     dist = math.hypot(dx, dy)
                     if dist > 0:
@@ -575,19 +609,17 @@ class Creature:
         # Random attacks based on aggression (independent of resource competition)
         self.random_attack(creatures, effective_aggression, effective_attack, effective_defense)
         
-        # Eat and reproduce
-        ate_child = False
-        ate_pregnant = False
-        if "Child Eater" in self.mutations:
-            from mutations import handle_child_eater
-            ate_child = handle_child_eater(self, creatures)
-        if "Pregnancy hunter" in self.mutations and not ate_child:
-            from mutations import handle_pregnancy_hunter
-            ate_pregnant = handle_pregnancy_hunter(self, creatures)
-        if not ate_child and not ate_pregnant:
-            self.eat(foods, waters)
+        # Eat and drink (always allow if hungry/thirsty, regardless of mutation logic)
+        if self.hunger < 100:
+            self.eat(foods)
+        if self.thirst < 100:
+            self.drink_from_pond(ponds)
         self.reproduce(creatures, age_factor=age_factor)
         handle_pack_mentality(self, creatures, get_biome)
+        # Clamp health, hunger, and thirst to a minimum of zero after all effects
+        self.health = max(0, self.health)
+        self.hunger = max(0, self.hunger)
+        self.thirst = max(0, self.thirst)
         return True
 
     def move_random(self, speed_override=None):
@@ -617,11 +649,31 @@ class Creature:
         visible = [i for i in items if i.active and math.hypot(i.x - self.x, i.y - self.y) <= vision]
         return min(visible, key=lambda i: math.hypot(i.x - self.x, i.y - self.y), default=None)
 
+    def find_nearest_pond(self, ponds, vision_override=None):
+        vision = vision_override if vision_override is not None else self.vision
+        # Prefer edge of pond (within 10px of edge)
+        candidates = []
+        for p in ponds:
+            dist = math.hypot(p.x - self.x, p.y - self.y)
+            if dist <= vision + p.radius:
+                edge_dist = abs(dist - p.radius)
+                candidates.append((edge_dist, dist, p))
+        if not candidates:
+            return None
+        # Prefer edge (edge_dist close to 0), then closest
+        candidates.sort(key=lambda tup: (tup[0], tup[1]))
+        return candidates[0][2]
+
     def random_attack(self, creatures, effective_aggression, effective_attack, effective_defense):
         global global_total_kills
+        # Amnesty: no random attacks for first 2 minutes
+        now = pygame.time.get_ticks()
+        if now - SIM_START_TIME < 120000:
+            return
         """Randomly attack nearby creatures based on aggression level"""
         # Skip if this creature is a child or pregnant
-        if self.age < self.maturity_age:
+        age_pct = self.age / self.max_age
+        if age_pct < 0.10:
             return
         # Check for nearby creatures to attack
         for other in creatures:
@@ -665,7 +717,7 @@ class Creature:
                             self.health -= 2
                     else:
                         # If attack fails, other creature might retaliate
-                        if random.random() < other.aggression * 0.2:  # 20% of other's aggression
+                        if random.random() < other.aggression:  # 20% of other's aggression
                             retaliation = max(0, other.attack - effective_defense)
                             if retaliation > 0:
                                 was_alive = self.health > 0
@@ -686,24 +738,47 @@ class Creature:
                                 if "Bone Spikes" in self.mutations and other.health > 0 and "Ethereal" not in other.mutations:
                                     other.health -= 2
 
-    def eat(self, foods, waters):
+    def eat(self, foods):
         for food in foods:
             if food.active and math.hypot(food.x - self.x, food.y - self.y) < CREATURE_RADIUS:
                 self.hunger = min(100, self.hunger + FOOD_VALUE)
                 self.health = min(self.max_health, self.health + 5)
                 food.consume()
                 break
-        for water in waters:
-            if water.active and math.hypot(water.x - self.x, water.y - self.y) < CREATURE_RADIUS:
+
+    def drink_from_pond(self, ponds):
+        global global_total_kills
+        now = pygame.time.get_ticks()
+        for pond in ponds:
+            dist = math.hypot(pond.x - self.x, pond.y - self.y)
+            if dist < pond.radius:
                 self.thirst = min(100, self.thirst + WATER_VALUE)
                 self.health = min(self.max_health, self.health + 5)
-                water.consume()
+                # Mark as wet for 30s if not just at the edge
+                if dist < pond.radius - 10:
+                    self._wet_until = now + 30000
+                    self._last_swim_time = now
+                # Aggression at watering hole: 20% chance to attack another creature in pond
+                if random.random() < 0.2:
+                    others = [c for c in creatures if c is not self and math.hypot(c.x - pond.x, c.y - pond.y) < pond.radius]
+                    if others:
+                        target = random.choice(others)
+                        damage = max(0, self.attack - target.defense)
+                        if damage > 0:
+                            was_alive = target.health > 0
+                            target.health -= damage
+                            if was_alive and target.health <= 0:
+                                self.kill_count += 1
+                                global_total_kills += 1
+                                from mutations import handle_cannibal, trigger_blood_frenzy
+                                handle_cannibal(self, target)
+                                trigger_blood_frenzy(self)
                 break
 
     def reproduce(self, creatures, age_factor=1.0):
-        # Prevent reproduction for bottom/top 25% of age
+        # Prevent reproduction for bottom/top 10% of age
         age_pct = self.age / self.max_age
-        if age_pct < 0.25 or age_pct > 0.75:
+        if age_pct < 0.10 or age_pct > 0.90:
             return
         if self.sex == 'F' and (pygame.time.get_ticks() < self.gestation_timer or self.pending_offspring):
             return
@@ -712,17 +787,17 @@ class Creature:
             time_left = self.max_age - self.age
             if self.gestation_duration > time_left:
                 return
-        if self.hunger < 70 or self.thirst < 70:
+        if self.hunger < 50 or self.thirst < 50:
             return
         for other in creatures:
             if other is self or {self.sex, other.sex} != {'M', 'F'}:
                 continue
-            if other.hunger < 70 or other.thirst < 70:
+            if other.hunger < 50 or other.thirst < 50:
                 continue
             if self.attractiveness * age_factor < other.threshold or other.attractiveness * age_factor < self.threshold:
                 continue
             other_age_pct = other.age / other.max_age
-            if other_age_pct < 0.25 or other_age_pct > 0.75:
+            if other_age_pct < 0.10 or other_age_pct > 0.90:
                 continue
             if math.hypot(other.x - self.x, other.y - self.y) < CREATURE_RADIUS * 2:
                 mother, father = (self, other) if self.sex == 'F' else (other, self)
@@ -779,30 +854,22 @@ class Creature:
             child_mutations.add("Pack mentality")
         # Fragmented DNA: extra mutation gain/loss for offspring
         fragmented = "Fragmented DNA" in self.mutations or "Fragmented DNA" in partner.mutations
-        if fragmented:
-            # Add 2-4 extra random mutations
-            possible_new = set(MUTATIONS.keys()) - child_mutations
-            for _ in range(random.randint(2, 4)):
-                if possible_new:
-                    new_mut = random.choice(list(possible_new))
-                    child_mutations.add(new_mut)
-                    possible_new.remove(new_mut)
-            # Remove 1-2 inherited mutations (not forbidden)
-            forbidden = {"Pack mentality", "Immortal", "Fragmented DNA"}
-            removable = [m for m in child_mutations if m not in forbidden]
-            for _ in range(random.randint(1, 2)):
-                if removable:
-                    lost = random.choice(removable)
-                    child_mutations.remove(lost)
-                    removable.remove(lost)
-        else:
-            # Add 1-2 new random mutations for testing
-            possible_new = set(MUTATIONS.keys()) - child_mutations
-            for _ in range(random.randint(1, 2)):
-                if possible_new:
-                    new_mut = random.choice(list(possible_new))
-                    child_mutations.add(new_mut)
-                    possible_new.remove(new_mut)
+        mega_rare_mutations = {
+            'Pack mentality', 'Immortal', 'Cannibal', 'Radioactive', 'Ethereal', 'Pregnancy hunter',
+            'Fragmented DNA', 'Rage State', 'Blood Frenzy', 'Thermal Core', 'Brood Sac',
+            'Color Pulse', 'Parasitic Womb', 'Null Core'
+        }
+        mutation_choices = list(MUTATIONS.keys())
+        # Mega rare: 0.0000001% chance, others: 0.00001% chance
+        roll = random.random()
+        if roll < 0.000000001:  # 0.0000001% mega rare
+            mega_rare = [m for m in mutation_choices if m in mega_rare_mutations and m not in child_mutations]
+            if mega_rare:
+                child_mutations.add(random.choice(mega_rare))
+        elif roll < 0.0000001:  # 0.00001% for all other mutations
+            normal = [m for m in mutation_choices if m not in mega_rare_mutations and m not in child_mutations]
+            if normal:
+                child_mutations.add(random.choice(normal))
         # Child starts with no pack_id (will form/join on its own)
         child = Creature(x=self.x, y=self.y, hue=mutate(hue_avg, 0.1), max_health=child_max_health, mutations=child_mutations)
         if hasattr(child, 'pack_id'):
@@ -828,6 +895,7 @@ class Creature:
         child.max_age = max(300000, min(360000, child.max_age))  # Clamp to 5-6 minutes
         child.maturity_age = int(child.max_age * 0.25)
         child.infertility = max(1, min(100, int(mutate((self.infertility + partner.infertility) / 2, 0.1))))
+        child.age = 0  # Ensure offspring start as children
         return child
 
     def draw(self):
@@ -927,14 +995,14 @@ class Creature:
                 dot_y = pos[1] - int(10 * zoom) + bar_height // 2
                 pygame.draw.circle(screen, (255, 105, 180), (dot_x, dot_y), max(3, int(3 * zoom)))
                 dot_offset += 10  # space for next dot
-            # Draw light blue dot if child (age < 25% max_age)
-            if self.age < self.maturity_age:
+            # Draw light blue dot if child (age < 10% max_age)
+            if self.age / self.max_age < 0.10:
                 dot_x = pos[0] + bar_width // 2 + 4 + dot_offset
                 dot_y = pos[1] - int(10 * zoom) + bar_height // 2
                 pygame.draw.circle(screen, (135, 206, 250), (dot_x, dot_y), max(3, int(3 * zoom)))
                 dot_offset += 10
-            # Draw grey dot if geriatric (age > 75% max_age)
-            if self.age > self.max_age * 0.75:
+            # Draw grey dot if geriatric (age > 90% max_age)
+            if self.age / self.max_age > 0.90:
                 dot_x = pos[0] + bar_width // 2 + 4 + dot_offset
                 dot_y = pos[1] - int(10 * zoom) + bar_height // 2
                 pygame.draw.circle(screen, (180, 180, 180), (dot_x, dot_y), max(3, int(3 * zoom)))
@@ -1017,7 +1085,6 @@ def draw_stats(creatures):
 # Game initialization
 creatures = [Creature() for _ in range(CREATURE_COUNT)]
 foods = [Food() for _ in range(FOOD_COUNT)]
-waters = [Water() for _ in range(WATER_COUNT)]
 selected_creature = None
 show_stats = True
 
@@ -1041,6 +1108,23 @@ try:
                 biome = get_biome(x, y)
                 color = biome_colors[biome]
                 pygame.draw.rect(biome_surface, color, (x, y, 10, 10))
+        # Draw ponds on biome surface
+        for pond in ponds:
+            # Draw normal pond
+            pygame.draw.circle(biome_surface, (0, 120, 255, 180), (pond.x, pond.y), pond.radius)
+            # At night, overlay frozen area for tundra-overlapping parts
+            if not is_daytime:
+                # Draw frozen overlay only where pond overlaps tundra
+                frozen_overlay = pygame.Surface((pond.radius*2, pond.radius*2), pygame.SRCALPHA)
+                for fy in range(pond.radius*2):
+                    for fx in range(pond.radius*2):
+                        wx = pond.x - pond.radius + fx
+                        wy = pond.y - pond.radius + fy
+                        if 0 <= wx < MAP_WIDTH and 0 <= wy < MAP_HEIGHT:
+                            if math.hypot(wx - pond.x, wy - pond.y) < pond.radius:
+                                if get_biome(wx, wy) == Biome.TUNDRA:
+                                    frozen_overlay.set_at((fx, fy), (180, 240, 255, 180))  # Light blue/white
+                biome_surface.blit(frozen_overlay, (pond.x - pond.radius, pond.y - pond.radius), special_flags=pygame.BLEND_RGBA_ADD)
         # Blit biome surface with camera/zoom
         surf = pygame.transform.smoothscale(biome_surface, (int(MAP_WIDTH * zoom), int(MAP_HEIGHT * zoom)))
         screen.blit(surf, (-int(camera_offset[0] * zoom), -int(camera_offset[1] * zoom)))
@@ -1095,14 +1179,9 @@ try:
             f.update()
             f.draw()
 
-        # Update and draw water
-        for w in waters:
-            w.update()
-            w.draw()
-
         # Update and draw creatures
         for c in creatures[:]:  # Use slice to avoid modification during iteration
-            if not c.update(foods, waters, creatures):
+            if not c.update(foods, creatures):
                 creatures.remove(c)
                 if c == selected_creature:
                     selected_creature = None
@@ -1126,6 +1205,15 @@ try:
                 c.x = max(0, min(MAP_WIDTH, c.x))
                 c.y = max(0, min(MAP_HEIGHT, c.y))
                 c.aggression = 0 # Set aggression to 0 when fleeing
+
+        # --- Birth logic: process pending_offspring when gestation ends ---
+        for c in creatures:
+            if c.sex == 'F' and c.pending_offspring and pygame.time.get_ticks() >= c.gestation_timer:
+                for father, count in c.pending_offspring:
+                    for _ in range(count):
+                        child = c.make_offspring(father)
+                        creatures.append(child)
+                c.pending_offspring.clear()
 
         # Draw selected creature info
         if selected_creature and selected_creature in creatures:
