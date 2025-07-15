@@ -14,6 +14,7 @@ import colorsys
 import sys
 from enum import Enum
 from mutations import MUTATIONS, apply_mutation_effect, handle_pack_mentality, handle_child_eater, handle_cannibal, handle_immortal, handle_radioactive, handle_pregnancy_hunter, handle_rage_state, handle_fragmented_dna, handle_blood_frenzy, trigger_blood_frenzy, handle_venom_glands, trigger_venom_glands, handle_howler, handle_burrower, handle_photosynthetic_skin, handle_cold_blooded, handle_thermal_core, handle_bioluminescent, handle_twin_gene, handle_loyal_mate, set_loyal_mates, handle_brood_sac, handle_springy_tendons, handle_tail_whip, handle_slippery_skin, handle_hyperaware, handle_paranoia, handle_dominant, handle_cowardly, handle_regen_core, handle_poisonous_blood
+from familytree import initialize_family_tree, add_creature_to_tree, update_creature_in_tree, mark_creature_dead_in_tree, get_family_info, get_family_analysis, draw_family_tree, get_node_at_position, set_coordinate_transform, family_tree
 
 # Constants
 FPS = 60
@@ -74,9 +75,24 @@ def update_day_night():
                     if get_biome(c.x, c.y) == Biome.TUNDRA:
                         c.health = 0
                         break
+        # --- Compute frozen overlays for all ponds ---
+        for pond in ponds:
+            frozen_overlay = pygame.Surface((pond.radius*2, pond.radius*2), pygame.SRCALPHA)
+            for fy in range(pond.radius*2):
+                for fx in range(pond.radius*2):
+                    wx = pond.x - pond.radius + fx
+                    wy = pond.y - pond.radius + fy
+                    if 0 <= wx < MAP_WIDTH and 0 <= wy < MAP_HEIGHT:
+                        if math.hypot(wx - pond.x, wy - pond.y) < pond.radius:
+                            if get_biome(wx, wy) == Biome.TUNDRA:
+                                frozen_overlay.set_at((fx, fy), (180, 240, 255, 180))  # Light blue/white
+            pond.frozen_overlay = frozen_overlay
     elif not is_daytime and now - last_cycle_switch > NIGHT_LENGTH_MS:
         is_daytime = True
         last_cycle_switch = now
+        # Clear overlays on day
+        for pond in ponds:
+            pond.frozen_overlay = None
 
 
 # Setup menu values (modifies globals)
@@ -115,14 +131,17 @@ def show_setup_menu():
 
 show_setup_menu()
 
+# Initialize family tree system
+initialize_family_tree()
+
 # Always use default window size
 screen = pygame.display.set_mode((DEFAULT_WIDTH, DEFAULT_HEIGHT))
 pygame.display.set_caption("Evolution Simulation")
 clock = pygame.time.Clock()
 
 # Load day/night icons
-sun_icon = pygame.image.load('sun.png')
-moon_icon = pygame.image.load('moon.png')
+sun_icon = pygame.image.load('Assets/sun.png')
+moon_icon = pygame.image.load('Assets/moon.png')
 icon_size = 48
 sun_icon = pygame.transform.smoothscale(sun_icon, (icon_size, icon_size))
 moon_icon = pygame.transform.smoothscale(moon_icon, (icon_size, icon_size))
@@ -141,6 +160,9 @@ def world_to_screen(x, y):
     screen_x = int((x - camera_offset[0]) * zoom)
     screen_y = int((y - camera_offset[1]) * zoom)
     return screen_x, screen_y
+
+# Set coordinate transform for family tree
+set_coordinate_transform(world_to_screen)
 
 ###########################
 # Biome definitions & helpers
@@ -189,6 +211,7 @@ class Pond:
         self.x = x
         self.y = y
         self.radius = radius
+        self.frozen_overlay = None  # Cached overlay for night
 
 # Limit number of ponds to a reasonable value based on map size
 min_ponds = 2
@@ -240,7 +263,9 @@ class Food(Respawnable):
         if self.active:
             pos = world_to_screen(self.x, self.y)
             size = max(2, int(2 * zoom))
-            pygame.draw.rect(screen, (0, 255, 0), (pos[0] - size//2, pos[1] - size//2, size, size))
+            # Only draw if on screen
+            if -size <= pos[0] <= screen.get_width() + size and -size <= pos[1] <= screen.get_height() + size:
+                pygame.draw.rect(screen, (0, 255, 0), (pos[0] - size//2, pos[1] - size//2, size, size))
 
     def __init__(self):
         super().__init__()
@@ -267,7 +292,7 @@ class Food(Respawnable):
 
 class Creature:
     _id_counter = 1
-    def __init__(self, x=None, y=None, hue=None, max_health=None, mutations=None, pack_id=None, pack_color=None):
+    def __init__(self, x=None, y=None, hue=None, max_health=None, mutations=None, pack_id=None, pack_color=None, mother_id=None, father_id=None):
         self.unique_id = Creature._id_counter
         Creature._id_counter += 1
         self.kill_count = 0
@@ -292,6 +317,9 @@ class Creature:
                     self.mutations = [random.choice(normal)]
         self.pack_id = pack_id
         self.pack_color = pack_color
+        # Family tree tracking
+        self.mother_id = mother_id
+        self.father_id = father_id
         # Position - random within map bounds
         self.x = x if x is not None else random.randint(0, MAP_WIDTH)
         self.y = y if y is not None else random.randint(0, MAP_HEIGHT)
@@ -342,7 +370,7 @@ class Creature:
         self._last_swim_time = 0
         self._avoid_tundra_until = 0
 
-    def update(self, foods, creatures):
+    def update(self, foods, creatures, grid):
         global global_total_kills
         # Call mutation handlers for per-frame effects
         handle_fragmented_dna(self)
@@ -427,18 +455,26 @@ class Creature:
         # Remove creature if health is zero or below
         if self.health <= 0:
             return False
+        # Remove creature if it has exceeded its lifespan
+        if self.age >= self.max_age:
+            self.health = 0
+            return False
+        # Remove creature if hunger or thirst is zero
+        if self.hunger <= 0 or self.thirst <= 0:
+            self.health = 0
+            return False
         # If burrowed, skip movement, attacking, and make invulnerable
         if burrowed:
             # Visual effect and stat update only
             self.x = max(0, min(MAP_WIDTH, self.x))
             self.y = max(0, min(MAP_HEIGHT, self.y))
             # Still drain hunger/thirst, age, and allow eating/reproducing
-            self.eat(foods)
-            self.reproduce(creatures, age_factor=age_factor)
+            self.eat(foods, grid)
+            self.reproduce(creatures, age_factor=age_factor, grid=grid)
             handle_pack_mentality(self, creatures, get_biome)
             return True
         # Find targets (use effective_vision)
-        food_target = self.find_nearest(foods, vision_override=effective_vision)
+        food_target = self.find_nearest(foods, vision_override=effective_vision, grid=grid, kind='food')
         pond_target = self.find_nearest_pond(ponds, vision_override=effective_vision) if self.thirst < 70 else None
         target = None
         # If hungry or thirsty, seek food or pond and do not move randomly
@@ -517,7 +553,7 @@ class Creature:
                 self.y += (dy / dist) * effective_speed * 0.5
         # Handle combat
         contested = False
-        for c in creatures:
+        for c in get_neighbors(grid, self.x, self.y, 'creature', CREATURE_RADIUS * 2):
             if c is not self and target and math.hypot(c.x - target.x, c.y - target.y) < CREATURE_RADIUS * 2:
                 # Pregnant creatures always flee from combat
                 if is_pregnant:
@@ -611,10 +647,10 @@ class Creature:
         
         # Eat and drink (always allow if hungry/thirsty, regardless of mutation logic)
         if self.hunger < 100:
-            self.eat(foods)
+            self.eat(foods, grid)
         if self.thirst < 100:
             self.drink_from_pond(ponds)
-        self.reproduce(creatures, age_factor=age_factor)
+        self.reproduce(creatures, age_factor=age_factor, grid=grid)
         handle_pack_mentality(self, creatures, get_biome)
         # Clamp health, hunger, and thirst to a minimum of zero after all effects
         self.health = max(0, self.health)
@@ -644,9 +680,13 @@ class Creature:
             self.x += (dx / dist) * speed_mod
             self.y += (dy / dist) * speed_mod
 
-    def find_nearest(self, items, vision_override=None):
+    def find_nearest(self, items, vision_override=None, grid=None, kind=None):
         vision = vision_override if vision_override is not None else self.vision
-        visible = [i for i in items if i.active and math.hypot(i.x - self.x, i.y - self.y) <= vision]
+        if grid is not None and kind is not None:
+            visible = get_neighbors(grid, self.x, self.y, kind, vision)
+            visible = [i for i in visible if getattr(i, 'active', True)]
+        else:
+            visible = [i for i in items if getattr(i, 'active', True) and math.hypot(i.x - self.x, i.y - self.y) <= vision]
         return min(visible, key=lambda i: math.hypot(i.x - self.x, i.y - self.y), default=None)
 
     def find_nearest_pond(self, ponds, vision_override=None):
@@ -738,8 +778,12 @@ class Creature:
                                 if "Bone Spikes" in self.mutations and other.health > 0 and "Ethereal" not in other.mutations:
                                     other.health -= 2
 
-    def eat(self, foods):
-        for food in foods:
+    def eat(self, foods, grid=None):
+        if grid is not None:
+            candidates = get_neighbors(grid, self.x, self.y, 'food', CREATURE_RADIUS)
+        else:
+            candidates = [f for f in foods if f.active and math.hypot(f.x - self.x, f.y - self.y) < CREATURE_RADIUS]
+        for food in candidates:
             if food.active and math.hypot(food.x - self.x, food.y - self.y) < CREATURE_RADIUS:
                 self.hunger = min(100, self.hunger + FOOD_VALUE)
                 self.health = min(self.max_health, self.health + 5)
@@ -775,7 +819,7 @@ class Creature:
                                 trigger_blood_frenzy(self)
                 break
 
-    def reproduce(self, creatures, age_factor=1.0):
+    def reproduce(self, creatures, age_factor=1.0, grid=None):
         # Prevent reproduction for bottom/top 10% of age
         age_pct = self.age / self.max_age
         if age_pct < 0.10 or age_pct > 0.90:
@@ -789,7 +833,12 @@ class Creature:
                 return
         if self.hunger < 50 or self.thirst < 50:
             return
-        for other in creatures:
+        # Use grid for neighbor search
+        if grid is not None:
+            candidates = get_neighbors(grid, self.x, self.y, 'creature', CREATURE_RADIUS * 2)
+        else:
+            candidates = creatures
+        for other in candidates:
             if other is self or {self.sex, other.sex} != {'M', 'F'}:
                 continue
             if other.hunger < 50 or other.thirst < 50:
@@ -870,8 +919,41 @@ class Creature:
             normal = [m for m in mutation_choices if m not in mega_rare_mutations and m not in child_mutations]
             if normal:
                 child_mutations.add(random.choice(normal))
+        # Determine parent IDs for family tree
+        mother_id = self.unique_id if self.sex == 'F' else partner.unique_id
+        father_id = partner.unique_id if self.sex == 'F' else self.unique_id
+        
+        # --- Incest interval scaling for mutation probability ---
+        def find_most_recent_common_ancestor(id1, id2, max_depth=10):
+            ancestors1 = {id1}
+            ancestors2 = {id2}
+            current1 = {id1}
+            current2 = {id2}
+            for depth in range(1, max_depth+1):
+                next1 = set()
+                for aid in current1:
+                    node = family_tree.get_node(aid)
+                    if node and node.parent_ids:
+                        next1.update([pid for pid in node.parent_ids if pid])
+                ancestors1.update(next1)
+                current1 = next1
+                next2 = set()
+                for aid in current2:
+                    node = family_tree.get_node(aid)
+                    if node and node.parent_ids:
+                        next2.update([pid for pid in node.parent_ids if pid])
+                ancestors2.update(next2)
+                current2 = next2
+                # Check for intersection
+                common = ancestors1 & ancestors2
+                if common:
+                    return depth  # Interval is the depth at which they first share an ancestor
+            return max_depth+1  # No common ancestor found within max_depth
+        interval = find_most_recent_common_ancestor(mother_id, father_id)
+        scale = min(10, 10 / interval) if interval >= 1 else 1
+        
         # Child starts with no pack_id (will form/join on its own)
-        child = Creature(x=self.x, y=self.y, hue=mutate(hue_avg, 0.1), max_health=child_max_health, mutations=child_mutations)
+        child = Creature(x=self.x, y=self.y, hue=mutate(hue_avg, 0.1), max_health=child_max_health, mutations=child_mutations, mother_id=mother_id, father_id=father_id)
         if hasattr(child, 'pack_id'):
             child.pack_id = None
         if hasattr(child, 'pack_color'):
@@ -896,6 +978,30 @@ class Creature:
         child.maturity_age = int(child.max_age * 0.25)
         child.infertility = max(1, min(100, int(mutate((self.infertility + partner.infertility) / 2, 0.1))))
         child.age = 0  # Ensure offspring start as children
+        
+        # Add child to family tree
+        add_creature_to_tree(child.unique_id, (mother_id, father_id))
+        
+        # --- Mutation logic with incest scaling ---
+        # Mega rare: 0.0000001% chance, others: 0.00001% chance
+        base_mega_rare = 0.0000001
+        base_normal = 0.00001
+        mega_rare_mutations = {
+            'Pack mentality', 'Immortal', 'Cannibal', 'Radioactive', 'Ethereal', 'Pregnancy hunter',
+            'Fragmented DNA', 'Rage State', 'Blood Frenzy', 'Thermal Core', 'Brood Sac',
+            'Color Pulse', 'Parasitic Womb', 'Null Core'
+        }
+        mutation_choices = list(MUTATIONS.keys())
+        roll = random.random()
+        if roll < base_mega_rare * scale:
+            mega_rare = [m for m in mutation_choices if m in mega_rare_mutations and m not in child.mutations]
+            if mega_rare:
+                child.mutations.append(random.choice(mega_rare))
+        elif roll < base_normal * scale:
+            normal = [m for m in mutation_choices if m not in mega_rare_mutations and m not in child.mutations]
+            if normal:
+                child.mutations.append(random.choice(normal))
+        
         return child
 
     def draw(self):
@@ -945,7 +1051,7 @@ class Creature:
             # --- Parasitic Womb host visual: parasite.png icon above health bar ---
             if hasattr(self, '_parasitic_hosted_by') and self._parasitic_hosted_by:
                 if not hasattr(self, '_parasite_icon'):
-                    self._parasite_icon = pygame.image.load('parasite.png')
+                    self._parasite_icon = pygame.image.load('Assets/parasite.png')
                     self._parasite_icon = pygame.transform.smoothscale(self._parasite_icon, (20, 20))
                 icon_x = pos[0] - 10  # Centered above health bar
                 icon_y = pos[1] - int(10 * zoom) - 24  # Above health bar
@@ -1087,6 +1193,43 @@ creatures = [Creature() for _ in range(CREATURE_COUNT)]
 foods = [Food() for _ in range(FOOD_COUNT)]
 selected_creature = None
 show_stats = True
+show_family_tree = False  # Toggle for family tree display
+
+# Add all initial creatures to family tree
+for creature in creatures:
+    add_creature_to_tree(creature.unique_id)
+
+# Add grid-based spatial partitioning for creatures and foods
+GRID_SIZE = 50  # Size of each grid cell in pixels
+
+def get_grid_cell(x, y):
+    return int(x // GRID_SIZE), int(y // GRID_SIZE)
+
+def build_spatial_grid(creatures, foods):
+    grid = {}
+    for c in creatures:
+        cell = get_grid_cell(c.x, c.y)
+        grid.setdefault(('creature', cell), []).append(c)
+    for f in foods:
+        cell = get_grid_cell(f.x, f.y)
+        grid.setdefault(('food', cell), []).append(f)
+    return grid
+
+def get_neighbors(grid, x, y, kind, radius):
+    cx, cy = get_grid_cell(x, y)
+    neighbors = []
+    for dx in [-1, 0, 1]:
+        for dy in [-1, 0, 1]:
+            cell = (kind, (cx + dx, cy + dy))
+            for obj in grid.get(cell, []):
+                if math.hypot(obj.x - x, obj.y - y) <= radius:
+                    neighbors.append(obj)
+    return neighbors
+
+# In the main loop, build the grid each frame before updates
+# grid = build_spatial_grid(creatures, foods)
+# Pass grid to Creature.update and use get_neighbors for neighbor lookups
+# Update Creature.find_nearest, combat, eating, mating, etc. to use grid-based neighbor queries
 
 # Main loop
 try:
@@ -1113,18 +1256,8 @@ try:
             # Draw normal pond
             pygame.draw.circle(biome_surface, (0, 120, 255, 180), (pond.x, pond.y), pond.radius)
             # At night, overlay frozen area for tundra-overlapping parts
-            if not is_daytime:
-                # Draw frozen overlay only where pond overlaps tundra
-                frozen_overlay = pygame.Surface((pond.radius*2, pond.radius*2), pygame.SRCALPHA)
-                for fy in range(pond.radius*2):
-                    for fx in range(pond.radius*2):
-                        wx = pond.x - pond.radius + fx
-                        wy = pond.y - pond.radius + fy
-                        if 0 <= wx < MAP_WIDTH and 0 <= wy < MAP_HEIGHT:
-                            if math.hypot(wx - pond.x, wy - pond.y) < pond.radius:
-                                if get_biome(wx, wy) == Biome.TUNDRA:
-                                    frozen_overlay.set_at((fx, fy), (180, 240, 255, 180))  # Light blue/white
-                biome_surface.blit(frozen_overlay, (pond.x - pond.radius, pond.y - pond.radius), special_flags=pygame.BLEND_RGBA_ADD)
+            if pond.frozen_overlay:
+                biome_surface.blit(pond.frozen_overlay, (pond.x - pond.radius, pond.y - pond.radius), special_flags=pygame.BLEND_RGBA_ADD)
         # Blit biome surface with camera/zoom
         surf = pygame.transform.smoothscale(biome_surface, (int(MAP_WIDTH * zoom), int(MAP_HEIGHT * zoom)))
         screen.blit(surf, (-int(camera_offset[0] * zoom), -int(camera_offset[1] * zoom)))
@@ -1135,6 +1268,7 @@ try:
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 1:  # Left click
                     mx, my = pygame.mouse.get_pos()
+                    # Normal creature selection (no family tree node click handling)
                     wx, wy = (mx / zoom + camera_offset[0], my / zoom + camera_offset[1])
                     found = False
                     for c in creatures:
@@ -1153,6 +1287,8 @@ try:
                     selected_creature = None
                 elif event.key == pygame.K_s:
                     show_stats = not show_stats
+                elif event.key == pygame.K_t:
+                    show_family_tree = not show_family_tree
 
         # Handle continuous key presses for camera movement
         keys = pygame.key.get_pressed()
@@ -1180,12 +1316,29 @@ try:
             f.draw()
 
         # Update and draw creatures
+        grid = build_spatial_grid(creatures, foods)
         for c in creatures[:]:  # Use slice to avoid modification during iteration
-            if not c.update(foods, creatures):
+            if not c.update(foods, creatures, grid):
                 creatures.remove(c)
+                # Mark creature as dead in family tree
+                mark_creature_dead_in_tree(c.unique_id, pygame.time.get_ticks())
                 if c == selected_creature:
                     selected_creature = None
             else:
+                # Update creature stats in family tree
+                stats = {
+                    'health': c.health,
+                    'hunger': c.hunger,
+                    'thirst': c.thirst,
+                    'age': c.age,
+                    'speed': c.speed,
+                    'vision': c.vision,
+                    'attack': c.attack,
+                    'defense': c.defense,
+                    'aggression': c.aggression,
+                    'kill_count': c.kill_count
+                }
+                update_creature_in_tree(c.unique_id, stats, c.mutations)
                 c.draw()
             # Always check for all mutation behaviors
             handle_child_eater(c, creatures)
@@ -1242,10 +1395,25 @@ try:
             if selected_creature.sex == 'F' and pygame.time.get_ticks() < selected_creature.gestation_timer:
                 remaining = max(0, (selected_creature.gestation_timer - pygame.time.get_ticks()) // 1000)
                 lines.append(f"Pregnant ({remaining}s left)")
+            
+            # Only show family info if family tree overlay is enabled
+            if show_family_tree:
+                family_info = get_family_info(selected_creature.unique_id)
+                if family_info:
+                    lines.append("--- Family Info ---")
+                    lines.append(f"Generation: {family_info.get('generation', 0)}")
+                    lines.append(f"Family Members: {family_info.get('total_family_members', 0)} (Living: {family_info.get('living_family_members', 0)})")
+                    lines.append(f"Ancestors: {family_info.get('total_ancestors', 0)} (Living: {family_info.get('living_ancestors', 0)})")
+                    lines.append(f"Descendants: {family_info.get('total_descendants', 0)} (Living: {family_info.get('living_descendants', 0)})")
+                    lines.append(f"Siblings: {family_info.get('siblings_count', 0)} (Living: {family_info.get('living_siblings_count', 0)})")
+                    lines.append(f"Children: {family_info.get('children_count', 0)}")
+                    lines.append(f"Alive Descendants: {family_info.get('alive_descendants', 0)}")
+                    lines.append(f"Inbreeding: {family_info.get('inbreeding_coefficient', 0):.3f}")
+            
             # Dynamically size panel or allow scrolling if too many lines
             panel_width = 250
             line_height = 15
-            max_panel_height = 300
+            max_panel_height = 400  # Increased for family info
             panel_height = min(max_panel_height, 20 + len(lines) * line_height)
             panel = pygame.Surface((panel_width, panel_height))
             panel.fill((30, 30, 30))
@@ -1287,10 +1455,10 @@ try:
 
         # Draw instructions
         instructions = [
-            f"Time: {'Day' if is_daytime else 'Night'}",
             "Click: Select creature",
             "ESC: Deselect",
             "S: Toggle stats",
+            "T: Toggle family tree",
             "WASD/Arrows: Move camera",
             "Mouse wheel: Zoom"
         ]

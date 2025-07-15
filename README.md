@@ -147,6 +147,12 @@ Visual lineage trees
 
 Different foods that provide more/less hunger, other uniqueness. IE: Fruit trees, berries, cactus etc.
 
+Traits that make creatures prefer different types of food, fruit, veggies, fish, (other new creatures?)
+
+Traits that force creatures to not be able to access certain kinds of food in certain biomes, or gives them access to certain food in certain biomes.
+
+Biome specific food.
+
 Environmental hazards and disease
 
 Weather in the different biomes
