@@ -165,6 +165,8 @@ Improved AI for creatures
 
 UI Beautification
 
+Statistical printout of all the stat averages and population report during your simulation
+
 Graphical overhaul
 
 Graphical representation and variation of traits and mutation
