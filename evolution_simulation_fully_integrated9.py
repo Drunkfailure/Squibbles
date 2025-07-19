@@ -15,7 +15,22 @@ import sys
 from enum import Enum
 from mutations import MUTATIONS, apply_mutation_effect, handle_pack_mentality, handle_child_eater, handle_cannibal, handle_immortal, handle_radioactive, handle_pregnancy_hunter, handle_rage_state, handle_fragmented_dna, handle_blood_frenzy, trigger_blood_frenzy, handle_venom_glands, trigger_venom_glands, handle_howler, handle_burrower, handle_photosynthetic_skin, handle_cold_blooded, handle_thermal_core, handle_bioluminescent, handle_twin_gene, handle_loyal_mate, set_loyal_mates, handle_brood_sac, handle_springy_tendons, handle_tail_whip, handle_slippery_skin, handle_hyperaware, handle_paranoia, handle_dominant, handle_cowardly, handle_regen_core, handle_poisonous_blood
 from familytree import initialize_family_tree, add_creature_to_tree, update_creature_in_tree, mark_creature_dead_in_tree, get_family_info, get_family_analysis, draw_family_tree, get_node_at_position, set_coordinate_transform, family_tree
+from GUI import draw_stats, draw_selected_creature_info, draw_instructions
+from Food import FoodManager
+import pygame_gui
+from pygame_gui.elements import UIPanel
+import pygame_gui.elements  # Ensure this is at the top with other imports
 
+def destroy_panel_and_labels(panel, labels):
+    from pygame_gui.elements import UIPanel
+    if panel is not None and isinstance(panel, UIPanel):
+        panel.kill()
+    if isinstance(labels, list):
+        for label in labels:
+            if hasattr(label, 'kill') and callable(label.kill):
+                label.kill()
+    return None, []
+       
 # Constants
 FPS = 60
 CREATURE_RADIUS = 6
@@ -146,6 +161,9 @@ icon_size = 48
 sun_icon = pygame.transform.smoothscale(sun_icon, (icon_size, icon_size))
 moon_icon = pygame.transform.smoothscale(moon_icon, (icon_size, icon_size))
 
+# ... after screen is created ...
+ui_manager = pygame_gui.UIManager((screen.get_width(), screen.get_height()))  # Use default theme, no theme argument
+
 
 # Utilities
 def hsv_to_rgb_tuple(h, s=1, v=1):
@@ -237,59 +255,6 @@ for _ in range(num_ponds):
 
 ###########################
 # Entities
-class Respawnable:
-    def __init__(self):
-        self.spawn_x = random.randint(0, MAP_WIDTH)
-        self.spawn_y = random.randint(0, MAP_HEIGHT)
-        self.x, self.y = self.spawn_x, self.spawn_y
-        self.active = True
-        self.respawn_timer = 0
-
-    def consume(self):
-        self.active = False
-        self.respawn_timer = pygame.time.get_ticks() + self.get_respawn_delay()
-
-    def get_respawn_delay(self):
-        return random.randint(10000, 15000)
-
-    def update(self):
-        if not self.active and pygame.time.get_ticks() >= self.respawn_timer:
-            self.active = True
-            self.x, self.y = self.spawn_x, self.spawn_y
-
-
-class Food(Respawnable):
-    def draw(self):
-        if self.active:
-            pos = world_to_screen(self.x, self.y)
-            size = max(2, int(2 * zoom))
-            # Only draw if on screen
-            if -size <= pos[0] <= screen.get_width() + size and -size <= pos[1] <= screen.get_height() + size:
-                pygame.draw.rect(screen, (0, 255, 0), (pos[0] - size//2, pos[1] - size//2, size, size))
-
-    def __init__(self):
-        super().__init__()
-        # Place food based on biome
-        placed = False
-        for _ in range(10):
-            x = random.randint(0, MAP_WIDTH)
-            y = random.randint(0, MAP_HEIGHT)
-            biome = get_biome(x, y)
-            if biome == Biome.DESERT and random.random() < 0.7:
-                continue  # Scarce in desert
-            if biome == Biome.RAINFOREST and random.random() < 0.7:
-                continue  # Plentiful, but not everywhere
-            if biome == Biome.TUNDRA and random.random() < 0.4:
-                continue  # More plentiful than desert, less than plains
-            self.x, self.y = x, y
-            self.spawn_x, self.spawn_y = x, y
-            placed = True
-            break
-        if not placed:
-            self.x, self.y = random.randint(0, MAP_WIDTH), random.randint(0, MAP_HEIGHT)
-            self.spawn_x, self.spawn_y = self.x, self.y
-
-
 class Creature:
     _id_counter = 1
     def __init__(self, x=None, y=None, hue=None, max_health=None, mutations=None, pack_id=None, pack_color=None, mother_id=None, father_id=None):
@@ -1115,82 +1080,9 @@ class Creature:
                 dot_offset += 10
 
 
-# Simple stats display function
-def draw_stats(creatures):
-    if not creatures:
-        return
-
-    # Calculate averages and ranges
-    total = len(creatures)
-    avg_speed = sum(c.speed for c in creatures) / total
-    min_speed = min(c.speed for c in creatures)
-    max_speed = max(c.speed for c in creatures)
-    avg_vision = sum(c.vision for c in creatures) / total
-    min_vision = min(c.vision for c in creatures)
-    max_vision = max(c.vision for c in creatures)
-    avg_hunger = sum(c.hunger for c in creatures) / total
-    min_hunger = min(c.hunger for c in creatures)
-    max_hunger = max(c.hunger for c in creatures)
-    avg_thirst = sum(c.thirst for c in creatures) / total
-    min_thirst = min(c.thirst for c in creatures)
-    max_thirst = max(c.thirst for c in creatures)
-    avg_health = sum(c.health for c in creatures) / total
-    min_health = min(c.health for c in creatures)
-    max_health = max(c.health for c in creatures)
-    avg_attractiveness = sum(c.attractiveness for c in creatures) / total
-    min_attractiveness = min(c.attractiveness for c in creatures)
-    max_attractiveness = max(c.attractiveness for c in creatures)
-    avg_offspring = sum(c.offspring_count for c in creatures) / total
-    min_offspring = min(c.offspring_count for c in creatures)
-    max_offspring = max(c.offspring_count for c in creatures)
-    avg_aggression = sum(c.aggression for c in creatures) / total
-    min_aggression = min(c.aggression for c in creatures)
-    max_aggression = max(c.aggression for c in creatures)
-    avg_attack = sum(c.attack for c in creatures) / total
-    min_attack = min(c.attack for c in creatures)
-    max_attack = max(c.attack for c in creatures)
-    avg_defense = sum(c.defense for c in creatures) / total
-    min_defense = min(c.defense for c in creatures)
-    max_defense = max(c.defense for c in creatures)
-    # Use global_total_kills instead of recalculating
-    total_kills = global_total_kills
-    # Average total lifespan and age (in seconds)
-    avg_lifespan = sum(c.max_age for c in creatures) / total / 1000
-    avg_age = sum(c.age for c in creatures) / total / 1000
-    avg_infertility = sum(c.infertility for c in creatures) / total
-
-    # Create stats panel
-    stats_text = [
-        f"Population: {total}",
-        f"Total Kills: {total_kills}",
-        f"Avg Lifespan: {avg_lifespan:.1f}s",
-        f"Avg Age: {avg_age:.1f}s",
-        f"Avg Infertility: {avg_infertility:.1f}",
-        f"Avg Speed: {avg_speed:.2f}  (min: {min_speed:.2f}, max: {max_speed:.2f})",
-        f"Avg Vision: {avg_vision:.1f}  (min: {min_vision}, max: {max_vision})",
-        f"Avg Hunger: {avg_hunger:.1f}  (min: {min_hunger:.1f}, max: {max_hunger:.1f})",
-        f"Avg Thirst: {avg_thirst:.1f}  (min: {min_thirst:.1f}, max: {max_thirst:.1f})",
-        f"Avg Health: {avg_health:.1f}  (min: {min_health:.1f}, max: {max_health:.1f})",
-        f"Avg Attack: {avg_attack:.2f}  (min: {min_attack:.2f}, max: {max_attack:.2f})",
-        f"Avg Defense: {avg_defense:.2f}  (min: {min_defense:.2f}, max: {max_defense:.2f})",
-        f"Avg Attractiveness: {avg_attractiveness:.2f}  (min: {min_attractiveness:.2f}, max: {max_attractiveness:.2f})",
-        f"Avg Offspring: {avg_offspring:.1f}  (min: {min_offspring}, max: {max_offspring})",
-        f"Avg Aggression: {avg_aggression:.2f}  (min: {min_aggression:.2f}, max: {max_aggression:.2f})"
-    ]
-    panel_height = 20 + len(stats_text) * 20
-    panel = pygame.Surface((340, panel_height))
-    panel.fill((30, 30, 30))
-
-    for i, text in enumerate(stats_text):
-        label = FONT.render(text, True, WHITE)
-        panel.blit(label, (10, 10 + i * 20))
-
-    return panel
-
-
 # Game initialization
 creatures = [Creature() for _ in range(CREATURE_COUNT)]
-foods = [Food() for _ in range(FOOD_COUNT)]
+foods = FoodManager(FOOD_COUNT, MAP_WIDTH, MAP_HEIGHT, get_biome, world_to_screen)
 selected_creature = None
 show_stats = True
 show_family_tree = False  # Toggle for family tree display
@@ -1201,6 +1093,11 @@ for creature in creatures:
 
 # Add grid-based spatial partitioning for creatures and foods
 GRID_SIZE = 50  # Size of each grid cell in pixels
+
+# Initialize GUI panel and label variables to avoid NameError
+stats_panel, stats_labels = None, []
+info_panel, info_labels = None, []
+instructions_panel, instructions_labels = None, []
 
 def get_grid_cell(x, y):
     return int(x // GRID_SIZE), int(y // GRID_SIZE)
@@ -1262,26 +1159,45 @@ try:
         surf = pygame.transform.smoothscale(biome_surface, (int(MAP_WIDTH * zoom), int(MAP_HEIGHT * zoom)))
         screen.blit(surf, (-int(camera_offset[0] * zoom), -int(camera_offset[1] * zoom)))
 
+        # ... near the top, after ui_manager is created ...
+        def is_mouse_over_gui(panels):
+            mouse_pos = pygame.mouse.get_pos()
+            for panel in panels:
+                if panel is not None and hasattr(panel, 'rect') and panel.rect.collidepoint(mouse_pos):
+                    return True
+            return False
+        # ... in the main loop, inside the event loop, before handling simulation clicks ...
         for event in pygame.event.get():
+            ui_manager.process_events(event)
             if event.type == pygame.QUIT:
                 running = False
+            elif event.type == pygame.MOUSEWHEEL:
+                # Only zoom the simulation if NOT over GUI
+                if not is_mouse_over_gui([stats_panel, info_panel, instructions_panel]):
+                    if event.y > 0:
+                        zoom = min(2.5, zoom + zoom_step)
+                    elif event.y < 0:
+                        zoom = max(0.5, zoom - zoom_step)
+                # Always let pygame_gui handle the event (already done by ui_manager.process_events(event))
             elif event.type == pygame.MOUSEBUTTONDOWN:
-                if event.button == 1:  # Left click
-                    mx, my = pygame.mouse.get_pos()
-                    # Normal creature selection (no family tree node click handling)
-                    wx, wy = (mx / zoom + camera_offset[0], my / zoom + camera_offset[1])
-                    found = False
-                    for c in creatures:
-                        if math.hypot(c.x - wx, c.y - wy) < CREATURE_RADIUS:
-                            selected_creature = c
-                            found = True
-                            break
-                    if not found:
-                        selected_creature = None
-                elif event.button == 4:  # Scroll up
-                    zoom = min(2.5, zoom + zoom_step)
-                elif event.button == 5:  # Scroll down
-                    zoom = max(0.5, zoom - zoom_step)
+                # Only run simulation click logic if NOT over GUI
+                if not is_mouse_over_gui([stats_panel, info_panel, instructions_panel]):
+                    if event.button == 1:  # Left click
+                        mx, my = pygame.mouse.get_pos()
+                        # Normal creature selection (no family tree node click handling)
+                        wx, wy = (mx / zoom + camera_offset[0], my / zoom + camera_offset[1])
+                        found = False
+                        for c in creatures:
+                            if math.hypot(c.x - wx, c.y - wy) < CREATURE_RADIUS:
+                                selected_creature = c
+                                found = True
+                                break
+                        if not found:
+                            selected_creature = None
+                    elif event.button == 4:  # Scroll up
+                        zoom = min(2.5, zoom + zoom_step)
+                    elif event.button == 5:  # Scroll down
+                        zoom = max(0.5, zoom - zoom_step)
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     selected_creature = None
@@ -1289,6 +1205,15 @@ try:
                     show_stats = not show_stats
                 elif event.key == pygame.K_t:
                     show_family_tree = not show_family_tree
+                elif event.key == pygame.K_q or event.key == pygame.K_e:
+                    hovered = ui_manager.get_hovering_any_element()
+                    if isinstance(hovered, pygame_gui.elements.UITextBox):
+                        if event.key == pygame.K_q:
+                            if hasattr(hovered, 'scroll_bar') and hovered.scroll_bar is not None:
+                                hovered.scroll_bar.scroll_wheel_up()
+                        elif event.key == pygame.K_e:
+                            if hasattr(hovered, 'scroll_bar') and hovered.scroll_bar is not None:
+                                hovered.scroll_bar.scroll_wheel_down()
 
         # Handle continuous key presses for camera movement
         keys = pygame.key.get_pressed()
@@ -1311,9 +1236,8 @@ try:
                 camera_offset[1] = int(selected_creature.y - screen.get_height() // 2 / zoom)
 
         # Update and draw food
-        for f in foods:
-            f.update()
-            f.draw()
+        foods.update()
+        foods.draw(screen, zoom)
 
         # Update and draw creatures
         grid = build_spatial_grid(creatures, foods)
@@ -1436,38 +1360,29 @@ try:
                     panel.blit(txt, (10, y))
             screen.blit(panel, (panel_x, panel_y))
 
-        # Draw stats panel
-        if show_stats:
-            stats_panel = draw_stats(creatures)
-            if stats_panel is not None:
-                screen.blit(stats_panel, (screen.get_width() - 310, 10))
+        # Destroy old panels/labels
+        stats_panel, stats_labels = destroy_panel_and_labels(stats_panel, stats_labels)
+        info_panel, info_labels = destroy_panel_and_labels(info_panel, info_labels)
+        instructions_panel, instructions_labels = destroy_panel_and_labels(instructions_panel, instructions_labels)
 
-        # Draw day/night icon in bottom right corner
-        icon_x = screen.get_width() - icon_size - 20
-        icon_y = screen.get_height() - icon_size - 40
-        if is_daytime:
-            screen.blit(sun_icon, (icon_x, icon_y))
-            label = BIG_FONT.render('Day', True, (255, 255, 100))
+        # Create new panels/labels
+        stats_panel, stats_labels = draw_stats(creatures, global_total_kills, ui_manager, pygame.Rect((50, 50), (300, 300)))
+        if not isinstance(stats_labels, list):
+            stats_labels = []
+
+        if selected_creature and selected_creature in creatures:
+            info_panel, info_labels = draw_selected_creature_info(selected_creature, creatures, ui_manager, pygame.Rect((10, 10), (250, 400)), show_family_tree, get_family_info, pygame, screen, zoom)
+            if not isinstance(info_labels, list):
+                info_labels = []
         else:
-            screen.blit(moon_icon, (icon_x, icon_y))
-            label = BIG_FONT.render('Night', True, (255, 255, 180))
-        screen.blit(label, (icon_x + icon_size//2 - label.get_width()//2, icon_y + icon_size + 2))
+            info_panel, info_labels = None, []
 
-        # Draw instructions
-        instructions = [
-            "Click: Select creature",
-            "ESC: Deselect",
-            "S: Toggle stats",
-            "T: Toggle family tree",
-            "WASD/Arrows: Move camera",
-            "Mouse wheel: Zoom"
-        ]
-        for i, instruction in enumerate(instructions):
-            text = FONT.render(instruction, True, WHITE)
-            screen.blit(text, (10, screen.get_height() - 100 + i * 20))
-
+        time_delta = clock.tick(FPS) / 1000.0
+        # Move ui_manager.draw_ui(screen) to be the very last drawing call
+        ui_manager.update(time_delta)
+        # ... all other drawing should be above this line ...
+        ui_manager.draw_ui(screen)
         pygame.display.flip()
-        clock.tick(FPS)
 except Exception as e:
     import traceback
     print('Exception in main loop:', e)
@@ -1475,3 +1390,4 @@ except Exception as e:
 finally:
     pygame.quit()
     sys.exit()
+
