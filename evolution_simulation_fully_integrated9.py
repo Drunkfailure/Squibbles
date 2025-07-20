@@ -15,7 +15,7 @@ import sys
 from enum import Enum
 from mutations import MUTATIONS, apply_mutation_effect, handle_pack_mentality, handle_child_eater, handle_cannibal, handle_immortal, handle_radioactive, handle_pregnancy_hunter, handle_rage_state, handle_fragmented_dna, handle_blood_frenzy, trigger_blood_frenzy, handle_venom_glands, trigger_venom_glands, handle_howler, handle_burrower, handle_photosynthetic_skin, handle_cold_blooded, handle_thermal_core, handle_bioluminescent, handle_twin_gene, handle_loyal_mate, set_loyal_mates, handle_brood_sac, handle_springy_tendons, handle_tail_whip, handle_slippery_skin, handle_hyperaware, handle_paranoia, handle_dominant, handle_cowardly, handle_regen_core, handle_poisonous_blood
 from familytree import initialize_family_tree, add_creature_to_tree, update_creature_in_tree, mark_creature_dead_in_tree, get_family_info, get_family_analysis, draw_family_tree, get_node_at_position, set_coordinate_transform, family_tree
-from GUI import draw_stats, draw_selected_creature_info, draw_instructions
+from GUI import draw_stats, draw_selected_creature_info, draw_instructions, update_stats_content, update_creature_info_content, apply_deferred_scroll
 from Food import FoodManager
 import pygame_gui
 from pygame_gui.elements import UIPanel
@@ -1099,6 +1099,99 @@ stats_panel, stats_labels = None, []
 info_panel, info_labels = None, []
 instructions_panel, instructions_labels = None, []
 
+# GUI state tracking variables
+stats_textbox = None
+info_textbox = None
+last_selected_creature = None
+last_show_family_tree = False
+
+# GUI state tracking variables - IMPROVED
+stats_panel, stats_labels = None, []
+info_panel, info_labels = None, []
+instructions_panel, instructions_labels = None, []
+stats_textbox = None
+info_textbox = None
+last_selected_creature = None
+last_show_family_tree = False
+last_stats_scroll_time = 0
+last_info_scroll_time = 0
+stats_scroll_pos = 0  # NEW: Store scroll positions
+info_scroll_pos = 0   # NEW: Store scroll positions
+
+def handle_events_fixed(screen, ui_manager, creatures, zoom, camera_offset):
+    """Fixed event handling that properly separates GUI and simulation interactions"""
+    global selected_creature, show_stats, show_family_tree, last_stats_scroll_time, last_info_scroll_time
+    
+    for event in pygame.event.get():
+        # Always let UI manager process events first
+        ui_manager.process_events(event)
+        
+        if event.type == pygame.QUIT:
+            return False  # Signal to quit
+            
+        elif event.type == pygame.MOUSEWHEEL:
+            # Get mouse position
+            mouse_x, mouse_y = pygame.mouse.get_pos()
+            
+            # Check if mouse is over any GUI panel
+            over_gui = False
+            if stats_panel and stats_panel.rect.collidepoint(mouse_x, mouse_y):
+                over_gui = True
+                last_stats_scroll_time = pygame.time.get_ticks()
+            elif info_panel and info_panel.rect.collidepoint(mouse_x, mouse_y):
+                over_gui = True
+                last_info_scroll_time = pygame.time.get_ticks()
+            elif instructions_panel and instructions_panel.rect.collidepoint(mouse_x, mouse_y):
+                over_gui = True
+            
+            # Only zoom simulation if NOT over GUI
+            if not over_gui:
+                if event.y > 0:
+                    zoom = min(2.5, zoom + zoom_step)
+                elif event.y < 0:
+                    zoom = max(0.5, zoom - zoom_step)
+                    
+        elif event.type == pygame.MOUSEBUTTONDOWN:
+            if event.button == 1:  # Left click
+                mouse_x, mouse_y = pygame.mouse.get_pos()
+                
+                # Check if click is over any GUI panel
+                over_gui = False
+                if stats_panel and stats_panel.rect.collidepoint(mouse_x, mouse_y):
+                    over_gui = True
+                elif info_panel and info_panel.rect.collidepoint(mouse_x, mouse_y):
+                    over_gui = True
+                elif instructions_panel and instructions_panel.rect.collidepoint(mouse_x, mouse_y):
+                    over_gui = True
+                
+                # Only handle simulation clicks if NOT over GUI
+                if not over_gui:
+                    # Convert screen to world coordinates
+                    wx = mouse_x / zoom + camera_offset[0]
+                    wy = mouse_y / zoom + camera_offset[1]
+                    
+                    # Find clicked creature
+                    found = False
+                    for c in creatures:
+                        if math.hypot(c.x - wx, c.y - wy) < CREATURE_RADIUS:
+                            selected_creature = c
+                            show_stats = True
+                            found = True
+                            break
+                    
+                    if not found:
+                        selected_creature = None
+                        
+        elif event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_ESCAPE:
+                selected_creature = None
+            elif event.key == pygame.K_s:
+                show_stats = not show_stats
+            elif event.key == pygame.K_t:
+                show_family_tree = not show_family_tree
+    
+    return True  # Continue running
+
 def get_grid_cell(x, y):
     return int(x // GRID_SIZE), int(y // GRID_SIZE)
 
@@ -1111,6 +1204,99 @@ def build_spatial_grid(creatures, foods):
         cell = get_grid_cell(f.x, f.y)
         grid.setdefault(('food', cell), []).append(f)
     return grid
+
+def update_gui_panels_fixed(creatures, global_total_kills, ui_manager, screen, selected_creature, show_stats, show_family_tree):
+    """Improved GUI panel management with better scroll preservation"""
+    global stats_panel, stats_labels, info_panel, info_labels, instructions_panel, instructions_labels
+    global stats_textbox, info_textbox, last_selected_creature, last_show_family_tree
+    global last_stats_scroll_time, last_info_scroll_time, stats_scroll_pos, info_scroll_pos
+    
+    current_time = pygame.time.get_ticks()
+    
+    # === Stats Panel ===
+    if show_stats:
+        if stats_panel is None:
+            # Create new stats panel
+            screen_width = screen.get_width()
+            stats_panel, stats_labels = draw_stats(creatures, global_total_kills, ui_manager, 
+                                                 pygame.Rect((screen_width - 350, 50), (300, 300)))
+            stats_textbox = stats_labels[0] if stats_labels else None
+            stats_scroll_pos = 0
+        else:
+            # Update content less frequently and preserve scroll
+            time_since_scroll = current_time - last_stats_scroll_time
+            
+            # Only update if not recently scrolled and enough time has passed
+            if time_since_scroll > 3000 and current_time % 500 < 17:  # Update every 0.5 seconds
+                # Save current scroll position
+                if stats_textbox and hasattr(stats_textbox, 'scroll_bar') and stats_textbox.scroll_bar:
+                    stats_scroll_pos = stats_textbox.scroll_bar.scroll_position
+                
+                # Update content
+                update_stats_content(stats_textbox, creatures, global_total_kills)
+                
+                # Restore scroll position immediately
+                if stats_textbox and hasattr(stats_textbox, 'scroll_bar') and stats_textbox.scroll_bar:
+                    stats_textbox.scroll_bar.scroll_position = stats_scroll_pos
+    else:
+        if stats_panel is not None:
+            stats_panel, stats_labels = destroy_panel_and_labels(stats_panel, stats_labels)
+            stats_textbox = None
+
+    # === Creature Info Panel ===
+    current_creature_changed = selected_creature != last_selected_creature
+    family_tree_toggled = show_family_tree != last_show_family_tree
+    
+    if selected_creature and selected_creature in creatures:
+        if info_panel is None or current_creature_changed or family_tree_toggled:
+            # Save scroll position from old panel
+            if info_textbox and hasattr(info_textbox, 'scroll_bar') and info_textbox.scroll_bar:
+                info_scroll_pos = info_textbox.scroll_bar.scroll_position
+            
+            # Recreate panel
+            if info_panel is not None:
+                info_panel, info_labels = destroy_panel_and_labels(info_panel, info_labels)
+            
+            info_panel, info_labels = draw_selected_creature_info(
+                selected_creature, creatures, ui_manager, 
+                pygame.Rect((10, 10), (250, 400)), 
+                show_family_tree, get_family_info, pygame, screen, zoom
+            )
+            info_textbox = info_labels[0] if info_labels else None
+            
+            # Restore scroll position if same creature
+            if not current_creature_changed and info_textbox and hasattr(info_textbox, 'scroll_bar') and info_textbox.scroll_bar:
+                info_textbox.scroll_bar.scroll_position = info_scroll_pos
+        else:
+            # Update content less frequently and preserve scroll
+            time_since_scroll = current_time - last_info_scroll_time
+            
+            if time_since_scroll > 3000 and current_time % 500 < 17:  # Update every 0.5 seconds
+                # Save current scroll position
+                if info_textbox and hasattr(info_textbox, 'scroll_bar') and info_textbox.scroll_bar:
+                    info_scroll_pos = info_textbox.scroll_bar.scroll_position
+                
+                # Update content
+                update_creature_info_content(info_textbox, selected_creature, creatures, show_family_tree)
+                
+                # Restore scroll position immediately
+                if info_textbox and hasattr(info_textbox, 'scroll_bar') and info_textbox.scroll_bar:
+                    info_textbox.scroll_bar.scroll_position = info_scroll_pos
+    else:
+        if info_panel is not None:
+            info_panel, info_labels = destroy_panel_and_labels(info_panel, info_labels)
+            info_textbox = None
+
+    # === Instructions Panel ===
+    if instructions_panel is None:
+        screen_height = screen.get_height()
+        instructions_panel, instructions_labels = draw_instructions(
+            ui_manager, pygame.Rect((10, screen_height - 170), (200, 150))
+        )
+
+    # Update tracking variables
+    last_selected_creature = selected_creature
+    last_show_family_tree = show_family_tree
 
 def get_neighbors(grid, x, y, kind, radius):
     cx, cy = get_grid_cell(x, y)
@@ -1159,61 +1345,11 @@ try:
         surf = pygame.transform.smoothscale(biome_surface, (int(MAP_WIDTH * zoom), int(MAP_HEIGHT * zoom)))
         screen.blit(surf, (-int(camera_offset[0] * zoom), -int(camera_offset[1] * zoom)))
 
-        # ... near the top, after ui_manager is created ...
-        def is_mouse_over_gui(panels):
-            mouse_pos = pygame.mouse.get_pos()
-            for panel in panels:
-                if panel is not None and hasattr(panel, 'rect') and panel.rect.collidepoint(mouse_pos):
-                    return True
-            return False
-        # ... in the main loop, inside the event loop, before handling simulation clicks ...
-        for event in pygame.event.get():
-            ui_manager.process_events(event)
-            if event.type == pygame.QUIT:
-                running = False
-            elif event.type == pygame.MOUSEWHEEL:
-                # Only zoom the simulation if NOT over GUI
-                if not is_mouse_over_gui([stats_panel, info_panel, instructions_panel]):
-                    if event.y > 0:
-                        zoom = min(2.5, zoom + zoom_step)
-                    elif event.y < 0:
-                        zoom = max(0.5, zoom - zoom_step)
-                # Always let pygame_gui handle the event (already done by ui_manager.process_events(event))
-            elif event.type == pygame.MOUSEBUTTONDOWN:
-                # Only run simulation click logic if NOT over GUI
-                if not is_mouse_over_gui([stats_panel, info_panel, instructions_panel]):
-                    if event.button == 1:  # Left click
-                        mx, my = pygame.mouse.get_pos()
-                        # Normal creature selection (no family tree node click handling)
-                        wx, wy = (mx / zoom + camera_offset[0], my / zoom + camera_offset[1])
-                        found = False
-                        for c in creatures:
-                            if math.hypot(c.x - wx, c.y - wy) < CREATURE_RADIUS:
-                                selected_creature = c
-                                found = True
-                                break
-                        if not found:
-                            selected_creature = None
-                    elif event.button == 4:  # Scroll up
-                        zoom = min(2.5, zoom + zoom_step)
-                    elif event.button == 5:  # Scroll down
-                        zoom = max(0.5, zoom - zoom_step)
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
-                    selected_creature = None
-                elif event.key == pygame.K_s:
-                    show_stats = not show_stats
-                elif event.key == pygame.K_t:
-                    show_family_tree = not show_family_tree
-                elif event.key == pygame.K_q or event.key == pygame.K_e:
-                    hovered = ui_manager.get_hovering_any_element()
-                    if isinstance(hovered, pygame_gui.elements.UITextBox):
-                        if event.key == pygame.K_q:
-                            if hasattr(hovered, 'scroll_bar') and hovered.scroll_bar is not None:
-                                hovered.scroll_bar.scroll_wheel_up()
-                        elif event.key == pygame.K_e:
-                            if hasattr(hovered, 'scroll_bar') and hovered.scroll_bar is not None:
-                                hovered.scroll_bar.scroll_wheel_down()
+
+        # FIXED EVENT HANDLING
+        running = handle_events_fixed(screen, ui_manager, creatures, zoom, camera_offset)
+        if not running:
+            break
 
         # Handle continuous key presses for camera movement
         keys = pygame.key.get_pressed()
@@ -1292,95 +1428,17 @@ try:
                         creatures.append(child)
                 c.pending_offspring.clear()
 
-        # Draw selected creature info
-        if selected_creature and selected_creature in creatures:
-            lines = [
-                f"ID: {selected_creature.unique_id}",
-                f"Sex: {selected_creature.sex}",
-                f"Age: {int(selected_creature.age/1000)}s / {int(selected_creature.max_age/1000)}s",
-                f"Speed: {selected_creature.speed:.2f}",
-                f"Vision: {selected_creature.vision}",
-                f"Hunger: {selected_creature.hunger:.1f}",
-                f"Thirst: {selected_creature.thirst:.1f}",
-                f"Health: {selected_creature.health:.1f} / {selected_creature.max_health}",
-                f"Attack: {selected_creature.attack:.2f}",
-                f"Defense: {selected_creature.defense:.2f}",
-                f"Offspring: {selected_creature.offspring_count}",
-                f"Attractiveness: {selected_creature.attractiveness:.2f}",
-                f"Aggression: {selected_creature.aggression:.2f}",
-                f"Kills: {selected_creature.kill_count}",
-                f"Infertility: {selected_creature.infertility}"
-            ]
-            # Add mutations to the stat panel
-            lines.append(f"Mutations: {', '.join(selected_creature.mutations) if selected_creature.mutations else 'None'}")
-            # Add pack status to the stat panel
-            if hasattr(selected_creature, 'pack_id') and selected_creature.pack_id is not None:
-                lines.append(f"Pack: True (ID: {selected_creature.pack_id})")
-            if selected_creature.sex == 'F' and pygame.time.get_ticks() < selected_creature.gestation_timer:
-                remaining = max(0, (selected_creature.gestation_timer - pygame.time.get_ticks()) // 1000)
-                lines.append(f"Pregnant ({remaining}s left)")
-            
-            # Only show family info if family tree overlay is enabled
-            if show_family_tree:
-                family_info = get_family_info(selected_creature.unique_id)
-                if family_info:
-                    lines.append("--- Family Info ---")
-                    lines.append(f"Generation: {family_info.get('generation', 0)}")
-                    lines.append(f"Family Members: {family_info.get('total_family_members', 0)} (Living: {family_info.get('living_family_members', 0)})")
-                    lines.append(f"Ancestors: {family_info.get('total_ancestors', 0)} (Living: {family_info.get('living_ancestors', 0)})")
-                    lines.append(f"Descendants: {family_info.get('total_descendants', 0)} (Living: {family_info.get('living_descendants', 0)})")
-                    lines.append(f"Siblings: {family_info.get('siblings_count', 0)} (Living: {family_info.get('living_siblings_count', 0)})")
-                    lines.append(f"Children: {family_info.get('children_count', 0)}")
-                    lines.append(f"Alive Descendants: {family_info.get('alive_descendants', 0)}")
-                    lines.append(f"Inbreeding: {family_info.get('inbreeding_coefficient', 0):.3f}")
-            
-            # Dynamically size panel or allow scrolling if too many lines
-            panel_width = 250
-            line_height = 15
-            max_panel_height = 400  # Increased for family info
-            panel_height = min(max_panel_height, 20 + len(lines) * line_height)
-            panel = pygame.Surface((panel_width, panel_height))
-            panel.fill((30, 30, 30))
-            scroll_offset = 0
-            mouse_x, mouse_y = pygame.mouse.get_pos()
-            panel_x, panel_y = 10, 10
-            if len(lines) * line_height + 20 > max_panel_height:
-                # Allow scrolling if mouse is over panel
-                if panel_x <= mouse_x <= panel_x + panel_width and panel_y <= mouse_y <= panel_y + panel_height:
-                    rel_y = mouse_y - panel_y
-                    scroll_area = panel_height - 40
-                    if scroll_area > 0:
-                        scroll_ratio = rel_y / scroll_area
-                        max_scroll = len(lines) * line_height + 20 - max_panel_height
-                        scroll_offset = int(scroll_ratio * max_scroll)
-            for i, line in enumerate(lines):
-                y = 10 + i * line_height - scroll_offset
-                if 0 <= y < panel_height - 10:
-                    txt = FONT.render(line, True, WHITE)
-                    panel.blit(txt, (10, y))
-            screen.blit(panel, (panel_x, panel_y))
 
-        # Destroy old panels/labels
-        stats_panel, stats_labels = destroy_panel_and_labels(stats_panel, stats_labels)
-        info_panel, info_labels = destroy_panel_and_labels(info_panel, info_labels)
-        instructions_panel, instructions_labels = destroy_panel_and_labels(instructions_panel, instructions_labels)
 
-        # Create new panels/labels
-        stats_panel, stats_labels = draw_stats(creatures, global_total_kills, ui_manager, pygame.Rect((50, 50), (300, 300)))
-        if not isinstance(stats_labels, list):
-            stats_labels = []
+        # FIXED GUI UPDATES
+        update_gui_panels_fixed(creatures, global_total_kills, ui_manager, screen, 
+                               selected_creature, show_stats, show_family_tree)
 
-        if selected_creature and selected_creature in creatures:
-            info_panel, info_labels = draw_selected_creature_info(selected_creature, creatures, ui_manager, pygame.Rect((10, 10), (250, 400)), show_family_tree, get_family_info, pygame, screen, zoom)
-            if not isinstance(info_labels, list):
-                info_labels = []
-        else:
-            info_panel, info_labels = None, []
-
+        # Update UI manager
         time_delta = clock.tick(FPS) / 1000.0
-        # Move ui_manager.draw_ui(screen) to be the very last drawing call
         ui_manager.update(time_delta)
-        # ... all other drawing should be above this line ...
+        
+        # Draw UI last (after all other drawing)
         ui_manager.draw_ui(screen)
         pygame.display.flip()
 except Exception as e:
