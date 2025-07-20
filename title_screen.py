@@ -2,6 +2,8 @@ import pygame
 import pygame_gui
 import sys
 from pygame_gui.elements import UIButton, UILabel, UIPanel, UITextEntryLine, UISelectionList
+import os
+import random
 
 class TitleScreen:
     def __init__(self, screen_width=1000, screen_height=800):
@@ -19,14 +21,32 @@ class TitleScreen:
         # Initialize UI manager
         self.ui_manager = pygame_gui.UIManager((screen_width, screen_height))
         
-        # Load title screen asset
+        # --- Load all title backgrounds from Assets/Title Screen ---
+        self.title_bg_images = []
+        bg_dir = os.path.join('Assets', 'Title Screen')
+        for fname in os.listdir(bg_dir):
+            if fname.lower().endswith('.png') and fname != 'squibbles.png':
+                try:
+                    img = pygame.image.load(os.path.join(bg_dir, fname)).convert_alpha()
+                    img = pygame.transform.smoothscale(img, (screen_width, screen_height))
+                    self.title_bg_images.append(img)
+                except Exception as e:
+                    print(f"Warning: Could not load {fname}: {e}")
+        if self.title_bg_images:
+            self.selected_bg = random.choice(self.title_bg_images)
+        else:
+            self.selected_bg = None
+        # --- Load squibbles foreground image from Title Screen folder ---
         try:
-            self.title_image = pygame.image.load('Assets/squibbles.png')
-            # Scale image to fill entire screen
-            self.title_image = pygame.transform.smoothscale(self.title_image, (screen_width, screen_height))
-        except pygame.error:
-            print("Warning: Could not load Assets/squibbles.png")
-            self.title_image = None
+            self.squibbles_fg = pygame.image.load(os.path.join(bg_dir, 'squibbles.png')).convert_alpha()
+            # Scale to larger size (e.g., 80% of screen width, keep aspect)
+            fg_width = int(screen_width * 0.8)
+            aspect = self.squibbles_fg.get_height() / self.squibbles_fg.get_width()
+            fg_height = int(fg_width * aspect)
+            self.squibbles_fg = pygame.transform.smoothscale(self.squibbles_fg, (fg_width, fg_height))
+        except Exception as e:
+            print(f"Warning: Could not load squibbles.png foreground: {e}")
+            self.squibbles_fg = None
         
         # Default values
         self.creature_count = 300
@@ -227,16 +247,19 @@ class TitleScreen:
             self.screen.fill((0, 0, 0))  # Black background
             
             if self.current_screen == "title":
-                # Draw title screen - full screen image
-                if self.title_image:
-                    self.screen.blit(self.title_image, (0, 0))
-                
+                # Draw random background
+                if self.selected_bg:
+                    self.screen.blit(self.selected_bg, (0, 0))
+                # Draw squibbles foreground image, slightly above vertical center
+                if self.squibbles_fg:
+                    fg_rect = self.squibbles_fg.get_rect()
+                    fg_rect.centerx = self.screen_width // 2
+                    fg_rect.centery = int(self.screen_height * 0.30)  # Move to upper part of the screen
+                    self.screen.blit(self.squibbles_fg, fg_rect)
                 # Draw blinking "Press Enter" text overlaid on the image
                 if blink_visible:
-                    # Use the pixel art font directly
                     text_surface = self.font.render("Press Enter", True, (255, 255, 255))
                     text_rect = text_surface.get_rect()
-                    # Center both horizontally and vertically
                     text_rect.centerx = self.screen_width // 2
                     text_rect.centery = self.screen_height // 2 + 250  # Position in lower center area
                     self.screen.blit(text_surface, text_rect)
