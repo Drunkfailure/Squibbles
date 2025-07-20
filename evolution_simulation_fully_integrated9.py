@@ -1,6 +1,6 @@
 # Evolution Simulation: Fixed Version
 # Features:
-# - Setup menu (creature count, food, water, map size)
+# - Title screen with setup menu (creature count, food, water, map size)
 # - HSV-based rainbow color inheritance
 # - Click to view creature stats in real time
 # - Camera follow on selected creature
@@ -17,6 +17,7 @@ from mutations import MUTATIONS, apply_mutation_effect, handle_pack_mentality, h
 from familytree import initialize_family_tree, add_creature_to_tree, update_creature_in_tree, mark_creature_dead_in_tree, get_family_info, get_family_analysis, draw_family_tree, get_node_at_position, set_coordinate_transform, family_tree
 from GUI import draw_stats, draw_selected_creature_info, draw_instructions, update_stats_content, update_creature_info_content, apply_deferred_scroll
 from Food import FoodManager
+from title_screen import show_title_screen
 import pygame_gui
 from pygame_gui.elements import UIPanel
 import pygame_gui.elements  # Ensure this is at the top with other imports
@@ -113,35 +114,27 @@ def update_day_night():
 # Setup menu values (modifies globals)
 def show_setup_menu():
     global CREATURE_COUNT, FOOD_COUNT, MAP_WIDTH, MAP_HEIGHT
-    print("Evolution Simulation Setup")
-    print("(Press Enter for default values)")
-
-    try:
-        user_input = input("Number of creatures (1-1000) [300]: ").strip()
-        CREATURE_COUNT = max(1, min(1000, int(user_input))) if user_input else 300
-    except ValueError:
-        CREATURE_COUNT = 300
-
-    try:
-        user_input = input("Number of food spawns (1-500) [500]: ").strip()
-        FOOD_COUNT = max(1, min(500, int(user_input))) if user_input else 500
-    except ValueError:
-        FOOD_COUNT = 500
-
-    try:
-        user_input = input("Map width (500-2000) [1000]: ").strip()
-        MAP_WIDTH = max(500, min(2000, int(user_input))) if user_input else 1000
-    except ValueError:
-        MAP_WIDTH = 1000
-
-    try:
-        user_input = input("Map height (500-2000) [1000]: ").strip()
-        MAP_HEIGHT = max(500, min(2000, int(user_input))) if user_input else 1000
-    except ValueError:
-        MAP_HEIGHT = 1000
-
+    
+    print("Starting setup menu...")
+    
+    # Show title screen and get settings
+    settings = show_title_screen()
+    
+    if settings is None:
+        # User closed the window
+        print("User closed title screen, exiting...")
+        sys.exit(0)
+    
+    # Apply settings from title screen
+    CREATURE_COUNT = settings['creature_count']
+    FOOD_COUNT = settings['food_count']
+    MAP_WIDTH = settings['map_width']
+    MAP_HEIGHT = settings['map_height']
+    
+    print(f"Settings applied: {CREATURE_COUNT} creatures, {FOOD_COUNT} food, {MAP_WIDTH}x{MAP_HEIGHT} map")
+    
     # Reset global kill counter on new simulation
-    # Set global_total_kills = 0 at the module level after this function
+    global_total_kills = 0
 
 
 show_setup_menu()
@@ -1086,6 +1079,7 @@ foods = FoodManager(FOOD_COUNT, MAP_WIDTH, MAP_HEIGHT, get_biome, world_to_scree
 selected_creature = None
 show_stats = True
 show_family_tree = False  # Toggle for family tree display
+show_instructions = True  # Toggle for instructions display
 
 # Add all initial creatures to family tree
 for creature in creatures:
@@ -1118,9 +1112,9 @@ last_info_scroll_time = 0
 stats_scroll_pos = 0  # NEW: Store scroll positions
 info_scroll_pos = 0   # NEW: Store scroll positions
 
-def handle_events_fixed(screen, ui_manager, creatures, zoom, camera_offset):
+def handle_events_fixed(screen, ui_manager, creatures, zoom, camera_offset, show_instructions_param):
     """Fixed event handling that properly separates GUI and simulation interactions"""
-    global selected_creature, show_stats, show_family_tree, last_stats_scroll_time, last_info_scroll_time
+    global selected_creature, show_stats, show_family_tree, show_instructions, last_stats_scroll_time, last_info_scroll_time
     
     for event in pygame.event.get():
         # Always let UI manager process events first
@@ -1151,6 +1145,16 @@ def handle_events_fixed(screen, ui_manager, creatures, zoom, camera_offset):
                 elif event.y < 0:
                     zoom = max(0.5, zoom - zoom_step)
                     
+        elif event.type == pygame.USEREVENT:
+            # Check for scroll events from pygame_gui
+            if hasattr(event, 'user_type'):
+                if event.user_type == pygame_gui.UI_TEXT_BOX_LINK_CLICKED:
+                    # Text box interaction - update scroll time
+                    if stats_textbox and event.ui_element == stats_textbox:
+                        last_stats_scroll_time = pygame.time.get_ticks()
+                    elif info_textbox and event.ui_element == info_textbox:
+                        last_info_scroll_time = pygame.time.get_ticks()
+                    
         elif event.type == pygame.MOUSEBUTTONDOWN:
             if event.button == 1:  # Left click
                 mouse_x, mouse_y = pygame.mouse.get_pos()
@@ -1159,8 +1163,10 @@ def handle_events_fixed(screen, ui_manager, creatures, zoom, camera_offset):
                 over_gui = False
                 if stats_panel and stats_panel.rect.collidepoint(mouse_x, mouse_y):
                     over_gui = True
+                    last_stats_scroll_time = pygame.time.get_ticks()
                 elif info_panel and info_panel.rect.collidepoint(mouse_x, mouse_y):
                     over_gui = True
+                    last_info_scroll_time = pygame.time.get_ticks()
                 elif instructions_panel and instructions_panel.rect.collidepoint(mouse_x, mouse_y):
                     over_gui = True
                 
@@ -1185,10 +1191,12 @@ def handle_events_fixed(screen, ui_manager, creatures, zoom, camera_offset):
         elif event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
                 selected_creature = None
-            elif event.key == pygame.K_s:
+            elif event.key == pygame.K_r:
                 show_stats = not show_stats
             elif event.key == pygame.K_t:
                 show_family_tree = not show_family_tree
+            elif event.key == pygame.K_i:
+                show_instructions = not show_instructions
     
     return True  # Continue running
 
@@ -1205,7 +1213,7 @@ def build_spatial_grid(creatures, foods):
         grid.setdefault(('food', cell), []).append(f)
     return grid
 
-def update_gui_panels_fixed(creatures, global_total_kills, ui_manager, screen, selected_creature, show_stats, show_family_tree):
+def update_gui_panels_fixed(creatures, global_total_kills, ui_manager, screen, selected_creature, show_stats, show_family_tree, show_instructions):
     """Improved GUI panel management with better scroll preservation"""
     global stats_panel, stats_labels, info_panel, info_labels, instructions_panel, instructions_labels
     global stats_textbox, info_textbox, last_selected_creature, last_show_family_tree
@@ -1227,7 +1235,7 @@ def update_gui_panels_fixed(creatures, global_total_kills, ui_manager, screen, s
             time_since_scroll = current_time - last_stats_scroll_time
             
             # Only update if not recently scrolled and enough time has passed
-            if time_since_scroll > 3000 and current_time % 500 < 17:  # Update every 0.5 seconds
+            if time_since_scroll > 5000 and current_time % 1000 < 17:  # Update every 1 second, pause for 5 seconds after scroll
                 # Save current scroll position
                 if stats_textbox and hasattr(stats_textbox, 'scroll_bar') and stats_textbox.scroll_bar:
                     stats_scroll_pos = stats_textbox.scroll_bar.scroll_position
@@ -1271,7 +1279,7 @@ def update_gui_panels_fixed(creatures, global_total_kills, ui_manager, screen, s
             # Update content less frequently and preserve scroll
             time_since_scroll = current_time - last_info_scroll_time
             
-            if time_since_scroll > 3000 and current_time % 500 < 17:  # Update every 0.5 seconds
+            if time_since_scroll > 5000 and current_time % 1000 < 17:  # Update every 1 second, pause for 5 seconds after scroll
                 # Save current scroll position
                 if info_textbox and hasattr(info_textbox, 'scroll_bar') and info_textbox.scroll_bar:
                     info_scroll_pos = info_textbox.scroll_bar.scroll_position
@@ -1288,11 +1296,15 @@ def update_gui_panels_fixed(creatures, global_total_kills, ui_manager, screen, s
             info_textbox = None
 
     # === Instructions Panel ===
-    if instructions_panel is None:
-        screen_height = screen.get_height()
-        instructions_panel, instructions_labels = draw_instructions(
-            ui_manager, pygame.Rect((10, screen_height - 170), (200, 150))
-        )
+    if show_instructions:
+        if instructions_panel is None:
+            screen_height = screen.get_height()
+            instructions_panel, instructions_labels = draw_instructions(
+                ui_manager, pygame.Rect((10, screen_height - 200), (250, 180))
+            )
+    else:
+        if instructions_panel is not None:
+            instructions_panel, instructions_labels = destroy_panel_and_labels(instructions_panel, instructions_labels)
 
     # Update tracking variables
     last_selected_creature = selected_creature
@@ -1347,7 +1359,7 @@ try:
 
 
         # FIXED EVENT HANDLING
-        running = handle_events_fixed(screen, ui_manager, creatures, zoom, camera_offset)
+        running = handle_events_fixed(screen, ui_manager, creatures, zoom, camera_offset, show_instructions)
         if not running:
             break
 
@@ -1430,9 +1442,17 @@ try:
 
 
 
+        # Draw day/night indicator in bottom right corner
+        icon_x = screen.get_width() - icon_size - 10
+        icon_y = screen.get_height() - icon_size - 10
+        if is_daytime:
+            screen.blit(sun_icon, (icon_x, icon_y))
+        else:
+            screen.blit(moon_icon, (icon_x, icon_y))
+
         # FIXED GUI UPDATES
         update_gui_panels_fixed(creatures, global_total_kills, ui_manager, screen, 
-                               selected_creature, show_stats, show_family_tree)
+                               selected_creature, show_stats, show_family_tree, show_instructions)
 
         # Update UI manager
         time_delta = clock.tick(FPS) / 1000.0

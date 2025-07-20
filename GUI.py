@@ -165,8 +165,9 @@ def draw_instructions(ui_manager, parent_rect):
     instructions = [
         "Click: Select creature",
         "ESC: Deselect",
-        "S: Toggle stats",
+        "R: Toggle stats",
         "T: Toggle family tree",
+        "I: Toggle instructions",
         "WASD/Arrows: Move camera",
         "Mouse wheel: Zoom"
     ]
@@ -176,14 +177,14 @@ def draw_instructions(ui_manager, parent_rect):
     )
     labels = []
     header = pygame_gui.elements.UILabel(
-        relative_rect=pygame.Rect((PANEL_PADDING, PANEL_PADDING), (parent_rect.width - 2 * PANEL_PADDING, 22)),
+        relative_rect=pygame.Rect((PANEL_PADDING, PANEL_PADDING), (parent_rect.width - 2 * PANEL_PADDING, 20)),
         text='Instructions',
         manager=ui_manager,
         container=panel
     )
     labels.append(header)
-    y = PANEL_PADDING + 24
-    label_height = 14  # Smaller font size
+    y = PANEL_PADDING + 22
+    label_height = 16  # Slightly larger for better readability
     for instruction in instructions:
         label = pygame_gui.elements.UILabel(
             relative_rect=pygame.Rect((PANEL_PADDING, y), (parent_rect.width - 2 * PANEL_PADDING, label_height)),
@@ -192,7 +193,7 @@ def draw_instructions(ui_manager, parent_rect):
             container=panel
         )
         labels.append(label)
-        y += label_height + 1  # Tighter spacing
+        y += label_height + 2  # Slightly more spacing for better readability
     return panel, labels
 
 def update_stats_content(stats_textbox, creatures, global_total_kills):
