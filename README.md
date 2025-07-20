@@ -1,8 +1,6 @@
-#🧬 Evolution Simulation
-
-A dynamic, real-time evolution simulation in Python using Pygame. Creatures roam, eat, drink, reproduce, mutate, and evolve across diverse biomes. Watch complex behaviors emerge as mutations interact in unpredictable ways.
-
+<img width="1536" height="1024" alt="squibbles" src="https://github.com/user-attachments/assets/0f2f7c50-a17e-4092-a27d-0d0152f2f230" />
 ##🌟 Features
+
 
 🚮 Simulation Mechanics
 
