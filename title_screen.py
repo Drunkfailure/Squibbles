@@ -49,10 +49,10 @@ class TitleScreen:
             self.squibbles_fg = None
         
         # Default values
-        self.creature_count = 300
-        self.food_count = 500
-        self.map_width = 1000
-        self.map_height = 1000
+        self.creature_count = 50  # Reduced for better performance
+        self.food_count = 100
+        self.map_width = 1200
+        self.map_height = 800
         
         # UI elements
         self.creature_entry = None
@@ -60,6 +60,7 @@ class TitleScreen:
         self.width_entry = None
         self.height_entry = None
         self.start_button = None
+        self.back_button = None
         self.title_label = None
         self.subtitle_label = None
         
@@ -111,7 +112,7 @@ class TitleScreen:
         # Food count
         food_label = UILabel(
             relative_rect=pygame.Rect((20, 70), (200, 30)),
-            text="Food Spawns (1-500):",
+            text="Food Spawns (1-1000):",
             manager=self.ui_manager,
             container=settings_panel
         )
@@ -126,7 +127,7 @@ class TitleScreen:
         # Map width
         width_label = UILabel(
             relative_rect=pygame.Rect((20, 120), (200, 30)),
-            text="Map Width (500-2000):",
+            text="Map Width (400-3000):",
             manager=self.ui_manager,
             container=settings_panel
         )
@@ -141,7 +142,7 @@ class TitleScreen:
         # Map height
         height_label = UILabel(
             relative_rect=pygame.Rect((20, 170), (200, 30)),
-            text="Map Height (500-2000):",
+            text="Map Height (300-2000):",
             manager=self.ui_manager,
             container=settings_panel
         )
@@ -156,9 +157,16 @@ class TitleScreen:
         # Instructions label
         instructions_label = UILabel(
             relative_rect=pygame.Rect((20, 220), (460, 80)),
-            text="Modify the settings above or press Enter for default values.\nClick 'Start Simulation' to begin!",
+            text="Modify the settings above or press Enter for default values.\nClick 'Start Simulation' to begin!\n\nNote: Higher values may affect performance. The simulation will use exactly what you enter.",
             manager=self.ui_manager,
             container=settings_panel
+        )
+        
+        # Back button
+        self.back_button = UIButton(
+            relative_rect=pygame.Rect((50, self.screen_height - 100), (150, 50)),
+            text="Back to Title",
+            manager=self.ui_manager
         )
         
         # Start button
@@ -179,16 +187,16 @@ class TitleScreen:
     def get_settings(self):
         """Get the current settings from the UI"""
         creature_count = self.validate_input(
-            self.creature_entry.get_text(), 1, 1000, 300
+            self.creature_entry.get_text(), 1, 1000, 50
         )
         food_count = self.validate_input(
-            self.food_entry.get_text(), 1, 500, 500
+            self.food_entry.get_text(), 1, 1000, 100
         )
         map_width = self.validate_input(
-            self.width_entry.get_text(), 500, 2000, 1000
+            self.width_entry.get_text(), 400, 3000, 1200
         )
         map_height = self.validate_input(
-            self.height_entry.get_text(), 500, 2000, 1000
+            self.height_entry.get_text(), 300, 2000, 800
         )
         
         return {
@@ -226,10 +234,10 @@ class TitleScreen:
                         elif self.current_screen == "customization":
                             # Return default settings
                             return {
-                                'creature_count': 300,
-                                'food_count': 500,
-                                'map_width': 1000,
-                                'map_height': 1000
+                                'creature_count': 50,
+                                'food_count': 100,
+                                'map_width': 1200,
+                                'map_height': 800
                             }
                 
                 if self.current_screen == "customization":
@@ -239,6 +247,10 @@ class TitleScreen:
                         if event.user_type == pygame_gui.UI_BUTTON_PRESSED:
                             if event.ui_element == self.start_button:
                                 return self.get_settings()
+                            elif event.ui_element == self.back_button:
+                                # Go back to title screen
+                                self.current_screen = "title"
+                                self.ui_manager.clear_and_reset()
             
             if self.current_screen == "customization":
                 self.ui_manager.update(time_delta)

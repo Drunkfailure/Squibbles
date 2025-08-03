@@ -1,71 +1,171 @@
-import random
 import pygame
+import random
+import math
+from typing import List, Tuple
 
-# Respawnable base class for food and similar entities
-class Respawnable:
-    def __init__(self, MAP_WIDTH, MAP_HEIGHT):
-        self.spawn_x = random.randint(0, MAP_WIDTH)
-        self.spawn_y = random.randint(0, MAP_HEIGHT)
-        self.x, self.y = self.spawn_x, self.spawn_y
-        self.active = True
-        self.respawn_timer = 0
+class Food:
+    def __init__(self, x: float, y: float):
+        """
+        Initialize a food item
+        
+        Args:
+            x: X position of the food
+            y: Y position of the food
+        """
+        self.x = x
+        self.y = y
+        self.radius = 5
+        self.color = (0, 255, 0)  # Green color for food
+        self.eaten = False
+        self.eaten_time = 0  # Time when food was eaten
+        self.respawn_delay = 15.0  # Seconds to wait before respawning
+        
+    def draw(self, screen: pygame.Surface):
+        """
+        Draw the food on the screen
+        
+        Args:
+            screen: Pygame surface to draw on
+        """
+        if not self.eaten:
+            pygame.draw.circle(screen, self.color, (int(self.x), int(self.y)), self.radius)
+    
+    def get_position(self) -> Tuple[float, float]:
+        """Get the current position of the food"""
+        return (self.x, self.y)
+    
+    def is_eaten(self) -> bool:
+        """Check if the food has been eaten"""
+        return self.eaten
+    
+    def eat(self, current_time: float):
+        """Mark the food as eaten"""
+        self.eaten = True
+        self.eaten_time = current_time
 
-    def consume(self):
-        self.active = False
-        self.respawn_timer = pygame.time.get_ticks() + self.get_respawn_delay()
-
-    def get_respawn_delay(self):
-        return random.randint(10000, 15000)
-
-    def update(self):
-        if not self.active and pygame.time.get_ticks() >= self.respawn_timer:
-            self.active = True
-            self.x, self.y = self.spawn_x, self.spawn_y
-
-# Food entity
-class Food(Respawnable):
-    def __init__(self, MAP_WIDTH, MAP_HEIGHT, get_biome):
-        super().__init__(MAP_WIDTH, MAP_HEIGHT)
-        placed = False
-        for _ in range(10):
-            x = random.randint(0, MAP_WIDTH)
-            y = random.randint(0, MAP_HEIGHT)
-            biome = get_biome(x, y)
-            if biome == 'DESERT' and random.random() < 0.7:
-                continue
-            if biome == 'RAINFOREST' and random.random() < 0.7:
-                continue
-            if biome == 'TUNDRA' and random.random() < 0.4:
-                continue
-            self.x, self.y = x, y
-            self.spawn_x, self.spawn_y = x, y
-            placed = True
-            break
-        if not placed:
-            self.x, self.y = random.randint(0, MAP_WIDTH), random.randint(0, MAP_HEIGHT)
-            self.spawn_x, self.spawn_y = self.x, self.y
-    def draw(self, screen, world_to_screen, zoom):
-        if self.active:
-            pos = world_to_screen(self.x, self.y)
-            size = max(2, int(2 * zoom))
-            if -size <= pos[0] <= screen.get_width() + size and -size <= pos[1] <= screen.get_height() + size:
-                pygame.draw.rect(screen, (0, 255, 0), (pos[0] - size//2, pos[1] - size//2, size, size))
-
-# FoodManager for handling all food entities
 class FoodManager:
-    def __init__(self, food_count, map_width, map_height, get_biome, world_to_screen):
-        self.foods = [Food(map_width, map_height, get_biome) for _ in range(food_count)]
+    def __init__(self, map_width: int, map_height: int, food_count: int = 100):
+        """
+        Initialize the food manager
+        
+        Args:
+            map_width: Width of the map
+            map_height: Height of the map
+            food_count: Number of food items to spawn
+        """
         self.map_width = map_width
         self.map_height = map_height
-        self.get_biome = get_biome
-        self.world_to_screen = world_to_screen
-    def update(self):
+        self.food_count = food_count
+        self.foods: List[Food] = []
+        self.current_time = 0.0
+        
+        # Spawn initial food
+        self.spawn_food()
+    
+    def spawn_food(self):
+        """Spawn food items at random locations"""
+        # Clear existing food
+        self.foods.clear()
+        
+        # Spawn new food items
+        for _ in range(self.food_count):
+            x = random.randint(50, self.map_width - 50)
+            y = random.randint(50, self.map_height - 50)
+            self.foods.append(Food(x, y))
+    
+    def respawn_food(self, food: Food):
+        """Respawn a single food item at a new random location"""
+        food.x = random.randint(50, self.map_width - 50)
+        food.y = random.randint(50, self.map_height - 50)
+        food.eaten = False
+        food.eaten_time = 0
+    
+    def update(self, dt: float):
+        """
+        Update the food manager
+        
+        Args:
+            dt: Delta time in seconds
+        """
+        # Update current time
+        self.current_time += dt
+        
+        # Check each food item for respawning
         for food in self.foods:
-            food.update()
-    def draw(self, screen, zoom):
+            if food.eaten and (self.current_time - food.eaten_time) >= food.respawn_delay:
+                self.respawn_food(food)
+    
+    def draw_all(self, screen: pygame.Surface):
+        """
+        Draw all food items
+        
+        Args:
+            screen: Pygame surface to draw on
+        """
         for food in self.foods:
-            food.draw(screen, self.world_to_screen, zoom)
-    def get_active_foods(self):
-        return [f for f in self.foods if f.active]
-    def __iter__(self):
-        return iter(self.foods) 
+            food.draw(screen)
+    
+    def get_food_at_position(self, x: float, y: float, radius: float = 10) -> Food:
+        """
+        Get food at a specific position
+        
+        Args:
+            x: X position to check
+            y: Y position to check
+            radius: Radius to check around the position
+            
+        Returns:
+            Food item if found, None otherwise
+        """
+        for food in self.foods:
+            if not food.eaten:
+                distance = math.sqrt((food.x - x) ** 2 + (food.y - y) ** 2)
+                if distance <= radius:
+                    return food
+        return None
+    
+    def get_available_food(self) -> List[Food]:
+        """Get all available (uneaten) food items"""
+        return [food for food in self.foods if not food.eaten]
+    
+    def get_food_count(self) -> int:
+        """Get the current number of available food items"""
+        return len(self.get_available_food())
+    
+    def get_total_food_count(self) -> int:
+        """Get the total number of food items (including eaten ones)"""
+        return len(self.foods)
+    
+    def eat_food_at_position(self, x: float, y: float, radius: float = 10) -> bool:
+        """
+        Eat food at a specific position
+        
+        Args:
+            x: X position to check
+            y: Y position to check
+            radius: Radius to check around the position
+            
+        Returns:
+            True if food was eaten, False otherwise
+        """
+        food = self.get_food_at_position(x, y, radius)
+        if food:
+            food.eat(self.current_time)
+            return True
+        return False
+    
+    def get_stats(self) -> dict:
+        """Get statistics about the food"""
+        available = self.get_food_count()
+        total = self.get_total_food_count()
+        
+        # Count food that will respawn soon (within 5 seconds)
+        respawning_soon = sum(1 for food in self.foods 
+                            if food.eaten and (self.current_time - food.eaten_time) >= 10.0)
+        
+        return {
+            'available_food': available,
+            'total_food': total,
+            'eaten_food': total - available,
+            'respawning_soon': respawning_soon
+        } 
