@@ -2,10 +2,17 @@ import pygame
 import sys
 import random
 from squibbles import SquibbleManager
-from title_screen import show_title_screen
+from GUI import show_title_screen
 from GUI import SimulationUI
-from food import FoodManager
-from loading_screen import show_loading_screen
+from Food import FoodManager
+from GUI import show_loading_screen
+from terrain import (
+    GpuContext,
+    generate_world,
+    render_biome_floor_surface,
+    WaterMap,
+)
+import math
 
 # Initialize pygame
 pygame.init()
@@ -50,6 +57,8 @@ class Simulation:
             self.creature_count = 10
             self.food_count = 0
             print("DEBUG: Using default settings")
+        # Keep original settings for terrain config access
+        self.settings_ref = settings
         
         # Use existing screen from loading screen
         self.screen = pygame.display.get_surface()
@@ -82,6 +91,39 @@ class Simulation:
         
         # Spawn initial squibbles based on settings
         self.spawn_initial_squibbles()
+
+        # Generate terrain background (GPU if available)
+        self._init_terrain()
+
+    def _init_terrain(self):
+        ctx = GpuContext.detect()
+        print(f"Terrain backend: {ctx.vendor} (GPU={ctx.is_gpu})")
+        # Generate multi-biome world + water
+        # Terrain generation settings can later be sourced from UI
+        # Pull terrain settings from title screen if provided
+        if hasattr(self, 'settings_ref') and self.settings_ref and 'terrain' in self.settings_ref:
+            tg_settings = dict(self.settings_ref['terrain'])
+        else:
+            tg_settings = {
+                'biome_scale': 5,
+                'biome_weights': {
+                    'plains': 45,
+                    'forest': 25,
+                    'desert': 20,
+                    'tundra': 10,
+                },
+                'pond_chance': 15.0,
+                'river_chance': 60.0,
+                'river_width': max(1, (self.map_height // 32) // 120),
+            }
+        biome_grid, water_mask, tile_size = generate_world(self.map_width, self.map_height, ctx, settings=tg_settings)
+        self.terrain_surface = render_biome_floor_surface(biome_grid, tile_size, water_mask)
+        # Build water map helper for thirst logic
+        self.water_map = WaterMap(water_mask, tile_size)
+        # Recreate food manager using biome grid so foods match biomes
+        self.food_manager = FoodManager(self.map_width, self.map_height, self.food_count)
+        # Respawn foods with biome-aware species assignment
+        self.food_manager.spawn_food(biome_grid=biome_grid, tile_size=tile_size)
     
     def spawn_initial_squibbles(self, count: int = None):
         """Spawn initial squibbles randomly across the map area"""
@@ -155,7 +197,7 @@ class Simulation:
         self.handle_camera_movement()
         
         if not self.paused:
-            self.squibble_manager.update_all(dt, self.map_width, self.map_height, self.food_manager)
+            self.squibble_manager.update_all(dt, self.map_width, self.map_height, self.food_manager, getattr(self, 'water_map', None))
             self.food_manager.update(dt)
     
     def draw_ui(self):
@@ -174,26 +216,50 @@ class Simulation:
         # Clear screen
         self.screen.fill(BACKGROUND_COLOR)
         
-        # Create a surface for the map area
-        map_surface = pygame.Surface((self.map_width, self.map_height))
-        map_surface.fill(BACKGROUND_COLOR)
-        
-        # Draw food on map surface
-        self.food_manager.draw_all(map_surface)
-        
-        # Draw squibbles on map surface
-        self.squibble_manager.draw_all(map_surface)
-        
-        # Apply zoom to map surface
-        if self.zoom_level != 1.0:
-            zoomed_width = int(self.map_width * self.zoom_level)
-            zoomed_height = int(self.map_height * self.zoom_level)
-            zoomed_surface = pygame.transform.scale(map_surface, (zoomed_width, zoomed_height))
+        # Determine viewport in world coords
+        screen_w, screen_h = self.screen.get_size()
+        view_w = int(screen_w / self.zoom_level)
+        view_h = int(screen_h / self.zoom_level)
+        view_x = int(-self.camera_x / self.zoom_level)
+        view_y = int(-self.camera_y / self.zoom_level)
+        # Clamp
+        view_x = max(0, min(self.map_width - view_w, view_x))
+        view_y = max(0, min(self.map_height - view_h, view_y))
+
+        # Blit terrain sub-rect directly to screen
+        if hasattr(self, 'terrain_surface') and self.terrain_surface:
+            sub = pygame.Rect(view_x, view_y, view_w, view_h)
+            terrain_sub = self.terrain_surface.subsurface(sub)
+            if self.zoom_level != 1.0:
+                terrain_sub = pygame.transform.scale(terrain_sub, (screen_w, screen_h))
+            self.screen.blit(terrain_sub, (0, 0))
         else:
-            zoomed_surface = map_surface
-        
-        # Draw map surface to screen with camera offset
-        self.screen.blit(zoomed_surface, (self.camera_x, self.camera_y))
+            self.screen.fill(BACKGROUND_COLOR)
+
+        # Draw visible foods and squibbles into a screen-sized overlay
+        overlay = pygame.Surface((screen_w, screen_h), pygame.SRCALPHA)
+        view_rect = pygame.Rect(view_x, view_y, view_w, view_h)
+        scale = self.zoom_level
+        # Draw foods with culling if available
+        if hasattr(self.food_manager, 'draw_visible'):
+            self.food_manager.draw_visible(overlay, view_rect, scale, (0, 0))
+        else:
+            self.food_manager.draw_all(overlay)
+        # Draw squibbles (cull manually)
+        for s in self.squibble_manager.squibbles:
+            if not s.alive:
+                continue
+            if view_rect.collidepoint(s.x, s.y):
+                sx = int((s.x - view_x) * scale)
+                sy = int((s.y - view_y) * scale)
+                # Temporarily reuse draw logic by offsetting
+                # Minimal re-draw: draw circle and direction line
+                pygame.draw.circle(overlay, s.color, (sx, sy), max(1, int(s.radius * scale)))
+                end_x = sx + int(math.cos(s.direction) * (s.radius + 5) * scale)
+                end_y = sy + int(math.sin(s.direction) * (s.radius + 5) * scale)
+                pygame.draw.line(overlay, (255, 255, 255), (sx, sy), (end_x, end_y), max(1, int(2 * scale)))
+
+        self.screen.blit(overlay, (0, 0))
         
         # Draw UI
         self.draw_ui()

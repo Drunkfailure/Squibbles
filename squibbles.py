@@ -44,7 +44,7 @@ class Squibble:
         self.alive = True
         self.age = 0
         
-    def update(self, dt: float, screen_width: int, screen_height: int, food_manager=None):
+    def update(self, dt: float, screen_width: int, screen_height: int, food_manager=None, water_map=None):
         """
         Update the squibble's state
         
@@ -69,17 +69,30 @@ class Squibble:
             self.alive = False
             return
             
+        # Try to drink if thirsty and near water
+        if water_map and self.thirst < 80.0:  # start seeking water when below 80
+            if water_map.is_water_near(self.x, self.y, self.radius + 8):
+                # Drink: restore thirst moderately
+                self.thirst = min(100.0, self.thirst + 25.0 * dt)
+
         # Try to eat food if available and hungry
         if food_manager and self.hunger < self.hunger_threshold:
-            if food_manager.eat_food_at_position(self.x, self.y, self.radius + 5):
-                self.hunger = min(100, self.hunger + 20)  # Restore hunger when eating
+            nutrition = food_manager.eat_food_at_position(self.x, self.y, self.radius + 5)
+            if nutrition:
+                hunger_gain, thirst_gain = nutrition
+                self.hunger = min(100, self.hunger + hunger_gain)
+                self.thirst = min(100, self.thirst + thirst_gain)
         
         # Check if we need to seek food
         seeking_food = self.hunger < self.hunger_threshold
         
         # Continuous food seeking behavior (more responsive)
         if seeking_food and food_manager:
-            nearest_food = self.find_nearest_food(food_manager)
+            # Use spatial index accelerated lookup if available
+            if hasattr(food_manager, 'get_nearest_food'):
+                nearest_food = food_manager.get_nearest_food(self.x, self.y, self.vision)
+            else:
+                nearest_food = self.find_nearest_food(food_manager)
             if nearest_food:
                 # Move towards the food immediately
                 dx = nearest_food.x - self.x
@@ -93,7 +106,10 @@ class Squibble:
         if self.direction_change_timer >= self.direction_change_interval:
             if seeking_food and food_manager:
                 # Check if we can see food
-                nearest_food = self.find_nearest_food(food_manager)
+                if hasattr(food_manager, 'get_nearest_food'):
+                    nearest_food = food_manager.get_nearest_food(self.x, self.y, self.vision)
+                else:
+                    nearest_food = self.find_nearest_food(food_manager)
                 if nearest_food:
                     # Move towards the food
                     dx = nearest_food.x - self.x
@@ -273,10 +289,10 @@ class SquibbleManager:
         
         self.squibbles.append(Squibble(x, y, color))
     
-    def update_all(self, dt: float, screen_width: int, screen_height: int, food_manager=None):
+    def update_all(self, dt: float, screen_width: int, screen_height: int, food_manager=None, water_map=None):
         """Update all squibbles"""
         for squibble in self.squibbles:
-            squibble.update(dt, screen_width, screen_height, food_manager)
+            squibble.update(dt, screen_width, screen_height, food_manager, water_map)
         
         # Remove dead squibbles
         self.squibbles = [s for s in self.squibbles if s.alive]
