@@ -6,6 +6,17 @@ import { RGB, Point } from '../utils/types';
 import { Food } from '../food/Food';
 import { FoodManager } from '../food/FoodManager';
 import { WaterMap } from '../terrain/WaterMap';
+import {
+  Genome,
+  ExpressedPhenotypes,
+  generateRandomGenome,
+  inheritGenome,
+  expressGenome,
+  MutationConfig,
+  DEFAULT_MUTATION_CONFIG,
+  MULTI_ALLELE_TRAITS,
+  getMultiAllelePhenotype,
+} from '../genetics/Genetics';
 
 export class Squibble {
   public x: number;
@@ -13,18 +24,32 @@ export class Squibble {
   public color: RGB;
   public radius: number = 10;
   public adultRadius: number = 10; // Full grown size
+  public size: number; // Heritable size stat (0.6 - 1.4 multiplier)
   
-  // Stats
+  // Genome - stores all genetic information
+  public genome: Genome;
+  
+  // Stats (derived from genome)
   public hunger: number = 100.0;
   public thirst: number = 100.0;
   public health: number = 100.0;
   public vision: number;
+  public hungerCapacity: number = 100.0; // Max hunger (genetic)
+  public thirstCapacity: number = 100.0; // Max thirst (genetic)
   
-  // Breeding stats
-  public attractiveness: number; // 0-1, randomly generated
+  // Breeding stats (derived from genome)
+  public attractiveness: number; // 0-1
   public minAttractiveness: number; // 0-1, minimum attractiveness this squibble will mate with
   public virility: number; // 0-1, affects probability of successful breeding
   public gender: 'male' | 'female'; // Gender for breeding
+  
+  // Visual traits (from multi-allele genes, for future graphical update)
+  public hornStyle: string;
+  public eyeType: string;
+  public earType: string;
+  public tailType: string;
+  public patternType: string;
+  public bodyShape: string;
   
   // Behavior thresholds
   private hungerThreshold: number = 70.0;
@@ -42,6 +67,9 @@ export class Squibble {
   // Speed-based consumption rates
   private baseHungerRate: number = 0.5;
   private baseThirstRate: number = 0.3;
+  
+  // Drinking state
+  public isDrinking: boolean = false;
   
   // Breeding state
   public seekingMate: boolean = false;
@@ -69,35 +97,54 @@ export class Squibble {
     
     // Genetics: inherit from parents or generate randomly
     if (parent1 && parent2) {
-      // Inherit traits from parents with variation
-      this.color = this.inheritColor(parent1.color, parent2.color);
-      this.vision = this.inheritTrait(parent1.vision, parent2.vision, 50, 150);
-      this.speed = this.inheritTrait(parent1.speed, parent2.speed, 1.0, 3.0);
-      this.attractiveness = this.inheritTrait(parent1.attractiveness, parent2.attractiveness, 0, 1);
-      this.minAttractiveness = Math.random(); // New random minimum
-      this.virility = this.inheritTrait(parent1.virility, parent2.virility, 0, 1);
-      this.gender = Math.random() < 0.5 ? 'male' : 'female'; // Random gender for offspring
-      // Inherit max age from parents (in frames, ~60fps so 3600 = 60 seconds)
-      this.maxAge = Math.round(this.inheritTrait(parent1.maxAge, parent2.maxAge, 1800, 18000)); // 30s - 5min
+      // Inherit genome from parents with mutations
+      this.genome = inheritGenome(parent1.genome, parent2.genome, DEFAULT_MUTATION_CONFIG);
     } else {
-      // Generate random stats for new squibble
-      this.color = color || this.generateRandomColor();
-      this.vision = 50 + Math.random() * 100; // 50-150
-      this.speed = 1.0 + Math.random() * 2.0; // 1.0-3.0
-      this.attractiveness = Math.random(); // 0-1
-      this.minAttractiveness = Math.random(); // 0-1
-      this.virility = Math.random(); // 0-1
-      this.gender = Math.random() < 0.5 ? 'male' : 'female'; // Random gender
-      // Random max age (in frames, ~60fps)
-      // 3-5 minutes = 180-300 seconds = 10800-18000 frames
-      this.maxAge = 10800 + Math.floor(Math.random() * 7200); // 3-5min lifespan
+      // Generate random genome
+      this.genome = generateRandomGenome();
     }
+    
+    // Express phenotypes from genome
+    const phenotypes = expressGenome(this.genome);
+    
+    // Apply expressed traits
+    this.color = color || (phenotypes.color as RGB);
+    this.vision = phenotypes.vision;
+    this.speed = phenotypes.speed;
+    this.attractiveness = phenotypes.attractiveness;
+    this.virility = phenotypes.virility;
+    this.maxAge = phenotypes.maxAge;
+    this.hungerCapacity = phenotypes.hungerCapacity;
+    this.thirstCapacity = phenotypes.thirstCapacity;
+    
+    // Set initial hunger/thirst to capacity
+    this.hunger = this.hungerCapacity;
+    this.thirst = this.thirstCapacity;
+    
+    // Visual traits (stored for future graphical update)
+    this.hornStyle = phenotypes.hornStyle;
+    this.eyeType = phenotypes.eyeType;
+    this.earType = phenotypes.earType;
+    this.tailType = phenotypes.tailType;
+    this.patternType = phenotypes.patternType;
+    this.bodyShape = phenotypes.bodyShape;
+    
+    // Gender is random (not genetic in this model)
+    this.gender = Math.random() < 0.5 ? 'male' : 'female';
+    
+    // Min attractiveness is random preference (not inherited)
+    this.minAttractiveness = Math.random();
+    
+    // Size with gender bias applied
+    const baseSize = phenotypes.size;
+    const genderBias = this.gender === 'female' ? -0.05 : 0.05;
+    this.size = Math.max(0.6, Math.min(1.4, baseSize + genderBias));
     
     this.direction = Math.random() * 2 * Math.PI;
     this.directionChangeInterval = 30 + Math.floor(Math.random() * 90); // 30-120 frames
     
-    // Set size based on whether this is a baby (has parents) or initial adult
-    this.adultRadius = 8 + Math.random() * 4; // Adult size 8-12
+    // Set adult radius based on size stat (base 10, range ~6-14)
+    this.adultRadius = 10 * this.size;
     
     if (parent1 && parent2) {
       // Babies start small
@@ -108,42 +155,6 @@ export class Squibble {
       this.age = Math.floor(this.maxAge * 0.2); // Start at 20% of max age (just became adult)
       this.radius = this.adultRadius; // Already full size
     }
-  }
-  
-  /**
-   * Inherit a trait from two parents with variation
-   */
-  private inheritTrait(parent1Value: number, parent2Value: number, min: number, max: number): number {
-    // Average of parents with some random variation
-    const average = (parent1Value + parent2Value) / 2;
-    const variation = (Math.random() - 0.5) * 0.2; // ±10% variation
-    const inherited = average * (1 + variation);
-    return Math.max(min, Math.min(max, inherited));
-  }
-  
-  /**
-   * Inherit color from parents (blend with variation)
-   */
-  private inheritColor(parent1Color: RGB, parent2Color: RGB): RGB {
-    const blend = (c1: number, c2: number) => {
-      const avg = (c1 + c2) / 2;
-      const variation = (Math.random() - 0.5) * 30; // ±15 color variation
-      return Math.max(0, Math.min(255, Math.round(avg + variation)));
-    };
-    
-    return [
-      blend(parent1Color[0], parent2Color[0]),
-      blend(parent1Color[1], parent2Color[1]),
-      blend(parent1Color[2], parent2Color[2]),
-    ];
-  }
-  
-  private generateRandomColor(): RGB {
-    return [
-      50 + Math.floor(Math.random() * 205),
-      50 + Math.floor(Math.random() * 205),
-      50 + Math.floor(Math.random() * 205),
-    ];
   }
   
   update(
@@ -224,11 +235,13 @@ export class Squibble {
       return;
     }
     
-    // Try to drink if thirsty and near water
-    if (waterMap && this.thirst < 80.0) {
-      if (waterMap.isWaterNear(this.x, this.y, this.radius + 8)) {
-        // Drink: restore thirst moderately
-        this.thirst = Math.min(100.0, this.thirst + 25.0 * dt);
+    // Try to drink if thirsty and near water (only stop to drink if actually thirsty)
+    this.isDrinking = false;
+    if (waterMap && this.thirst < 90) {
+      if (waterMap.isWaterNear(this.x, this.y, this.radius + 20)) {
+        // Drink: restore thirst gradually (stay until full)
+        this.isDrinking = true;
+        this.thirst = Math.min(this.thirstCapacity, this.thirst + 30.0 * dt);
       }
     }
     
@@ -263,13 +276,25 @@ export class Squibble {
       this.seekingMate = canSeekMate;
     }
     
-    // Priority: Food > Mate > Wander
+    // Check if we need to seek water (start at 50%, drink until 90%)
+    const seekingWater = this.thirst < 50;
+    
+    // Priority: Food > Water > Mate > Wander
     if (seekingFood && foodManager) {
       const nearestFood = foodManager.getNearestFood(this.x, this.y, this.vision);
       if (nearestFood) {
         // Move towards the food immediately
         const dx = nearestFood.x - this.x;
         const dy = nearestFood.y - this.y;
+        this.direction = Math.atan2(dy, dx);
+        this.directionChangeTimer = 0;
+      }
+    } else if (seekingWater && waterMap) {
+      const nearestWater = waterMap.findNearestWater(this.x, this.y, this.vision);
+      if (nearestWater) {
+        // Move towards the water
+        const dx = nearestWater.x - this.x;
+        const dy = nearestWater.y - this.y;
         this.direction = Math.atan2(dy, dx);
         this.directionChangeTimer = 0;
       }
@@ -317,7 +342,7 @@ export class Squibble {
     const pregnancySpeedPenalty = this.isPregnant ? (1 - pregnancyProgress * 0.5) : 1.0;
     const effectiveSpeed = this.speed * pregnancySpeedPenalty;
     
-    if (!this.isBreeding) {
+    if (!this.isBreeding && !this.isDrinking) {
       this.x += Math.cos(this.direction) * effectiveSpeed;
       this.y += Math.sin(this.direction) * effectiveSpeed;
     }
@@ -359,6 +384,16 @@ export class Squibble {
       is_pregnant: this.isPregnant,
       pregnancy_progress: this.isPregnant ? (1 - this.pregnancyTimeRemaining / this.pregnancyDuration) : 0,
       pregnancy_time_remaining: this.pregnancyTimeRemaining,
+      size: this.size,
+      hunger_capacity: this.hungerCapacity,
+      thirst_capacity: this.thirstCapacity,
+      // Visual traits (for future graphical update)
+      horn_style: this.hornStyle,
+      eye_type: this.eyeType,
+      ear_type: this.earType,
+      tail_type: this.tailType,
+      pattern_type: this.patternType,
+      body_shape: this.bodyShape,
     };
   }
   

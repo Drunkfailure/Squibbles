@@ -40,4 +40,38 @@ export class WaterMap {
     
     return false;
   }
+  
+  /**
+   * Find nearest water tile center within vision range
+   */
+  findNearestWater(x: number, y: number, visionRange: number): { x: number; y: number } | null {
+    const ts = this.tileSize;
+    const minCx = Math.floor(Math.max(0, (x - visionRange) / ts));
+    const maxCx = Math.floor(Math.min(this.cols - 1, (x + visionRange) / ts));
+    const minCy = Math.floor(Math.max(0, (y - visionRange) / ts));
+    const maxCy = Math.floor(Math.min(this.rows - 1, (y + visionRange) / ts));
+    
+    let nearestWater: { x: number; y: number } | null = null;
+    let nearestDistSq = visionRange * visionRange;
+    
+    for (let cy = minCy; cy <= maxCy; cy++) {
+      for (let cx = minCx; cx <= maxCx; cx++) {
+        if (this.mask[cy * this.cols + cx]) {
+          // Center of water tile
+          const waterX = (cx + 0.5) * ts;
+          const waterY = (cy + 0.5) * ts;
+          const dx = waterX - x;
+          const dy = waterY - y;
+          const distSq = dx * dx + dy * dy;
+          
+          if (distSq < nearestDistSq) {
+            nearestDistSq = distSq;
+            nearestWater = { x: waterX, y: waterY };
+          }
+        }
+      }
+    }
+    
+    return nearestWater;
+  }
 }

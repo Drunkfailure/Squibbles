@@ -131,7 +131,7 @@ export class SimulationUI {
     if (!squibble) return;
     
     const panelWidth = 280;
-    const panelHeight = 350;
+    const panelHeight = 480;
     const panelX = this.screenWidth - panelWidth - 10;
     const panelY = 10;
     
@@ -170,6 +170,9 @@ export class SimulationUI {
       `  Attractiveness: ${(stats.attractiveness * 100).toFixed(1)}%`,
       `  Min Attractiveness: ${(stats.min_attractiveness * 100).toFixed(1)}%`,
       `  Virility: ${(stats.virility * 100).toFixed(1)}%`,
+      `  Size: ${(stats.size * 100).toFixed(0)}%`,
+      '',
+      'Breeding:',
       `  Cooldown: ${stats.breeding_cooldown > 0 ? stats.breeding_cooldown.toFixed(1) + 's' : 'Ready'}`,
       `  Pregnant: ${stats.is_pregnant ? `Yes (${(stats.pregnancy_progress * 100).toFixed(0)}%)` : 'No'}`,
       '',
@@ -178,8 +181,13 @@ export class SimulationUI {
       `  Seeking Mate: ${stats.seeking_mate ? 'Yes' : 'No'}`,
       `  Alive: ${stats.alive ? 'Yes' : 'No'}`,
       '',
-      'Controls:',
-      'ESC - Deselect',
+      'Appearance:',
+      `  Horns: ${stats.horn_style}`,
+      `  Eyes: ${stats.eye_type}`,
+      `  Ears: ${stats.ear_type}`,
+      `  Tail: ${stats.tail_type}`,
+      `  Pattern: ${stats.pattern_type}`,
+      `  Body: ${stats.body_shape}`,
     ];
     
     this.squibbleDetailText = new Text(lines.join('\n'), style);
