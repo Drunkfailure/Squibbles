@@ -12,6 +12,7 @@ export class Squibble {
   public y: number;
   public color: RGB;
   public radius: number = 10;
+  public adultRadius: number = 10; // Full grown size
   
   // Stats
   public hunger: number = 100.0;
@@ -51,9 +52,16 @@ export class Squibble {
   private breedingCooldown: number = 0;
   private breedingCooldownDuration: number = 30.0; // seconds between breeding attempts
   
+  // Pregnancy state (females only)
+  public isPregnant: boolean = false;
+  public pregnancyTimeRemaining: number = 0;
+  public pregnancyDuration: number = 25.0; // Base gestation ~25 seconds (varies)
+  public pregnancyFather: Squibble | null = null; // Store father for genetics
+  
   // State
   public alive: boolean = true;
-  public age: number = 0;
+  public age: number = 0; // Age in frames
+  public maxAge: number; // Maximum age in frames before death (genetic)
   
   constructor(x: number, y: number, color?: RGB, parent1?: Squibble, parent2?: Squibble) {
     this.x = x;
@@ -69,6 +77,8 @@ export class Squibble {
       this.minAttractiveness = Math.random(); // New random minimum
       this.virility = this.inheritTrait(parent1.virility, parent2.virility, 0, 1);
       this.gender = Math.random() < 0.5 ? 'male' : 'female'; // Random gender for offspring
+      // Inherit max age from parents (in frames, ~60fps so 3600 = 60 seconds)
+      this.maxAge = Math.round(this.inheritTrait(parent1.maxAge, parent2.maxAge, 1800, 18000)); // 30s - 5min
     } else {
       // Generate random stats for new squibble
       this.color = color || this.generateRandomColor();
@@ -78,10 +88,26 @@ export class Squibble {
       this.minAttractiveness = Math.random(); // 0-1
       this.virility = Math.random(); // 0-1
       this.gender = Math.random() < 0.5 ? 'male' : 'female'; // Random gender
+      // Random max age (in frames, ~60fps)
+      // 3-5 minutes = 180-300 seconds = 10800-18000 frames
+      this.maxAge = 10800 + Math.floor(Math.random() * 7200); // 3-5min lifespan
     }
     
     this.direction = Math.random() * 2 * Math.PI;
     this.directionChangeInterval = 30 + Math.floor(Math.random() * 90); // 30-120 frames
+    
+    // Set size based on whether this is a baby (has parents) or initial adult
+    this.adultRadius = 8 + Math.random() * 4; // Adult size 8-12
+    
+    if (parent1 && parent2) {
+      // Babies start small
+      this.radius = 4;
+      this.age = 0;
+    } else {
+      // Initial squibbles start as young adults (at beginning of fertile period)
+      this.age = Math.floor(this.maxAge * 0.2); // Start at 20% of max age (just became adult)
+      this.radius = this.adultRadius; // Already full size
+    }
   }
   
   /**
@@ -134,6 +160,21 @@ export class Squibble {
     
     this.age++;
     
+    // Die of old age
+    if (this.age >= this.maxAge) {
+      this.alive = false;
+      return;
+    }
+    
+    // Grow from baby to adult size over first 1/5 of life
+    const growthPhase = this.maxAge * 0.2;
+    if (this.age < growthPhase) {
+      const growthProgress = this.age / growthPhase;
+      this.radius = 4 + (this.adultRadius - 4) * growthProgress;
+    } else {
+      this.radius = this.adultRadius;
+    }
+    
     // Update breeding cooldown
     if (this.breedingCooldown > 0) {
       this.breedingCooldown = Math.max(0, this.breedingCooldown - dt);
@@ -159,10 +200,23 @@ export class Squibble {
       // If breeding completes, it's handled by SquibbleManager
     }
     
+    // Update pregnancy
+    if (this.isPregnant) {
+      this.pregnancyTimeRemaining = Math.max(0, this.pregnancyTimeRemaining - dt);
+    }
+    
+    // Calculate pregnancy progress (0 = not pregnant, 1 = about to give birth)
+    const pregnancyProgress = this.isPregnant 
+      ? 1 - (this.pregnancyTimeRemaining / this.pregnancyDuration) 
+      : 0;
+    
+    // Pregnancy increases consumption rates (up to 2x at full term)
+    const pregnancyMultiplier = 1.0 + pregnancyProgress;
+    
     // Decrease stats over time (speed affects consumption rate)
     const speedMultiplier = 1.0 + (this.speed - 1.0) * 0.5;
-    this.hunger -= this.baseHungerRate * speedMultiplier * dt;
-    this.thirst -= this.baseThirstRate * speedMultiplier * dt;
+    this.hunger -= this.baseHungerRate * speedMultiplier * pregnancyMultiplier * dt;
+    this.thirst -= this.baseThirstRate * speedMultiplier * pregnancyMultiplier * dt;
     
     // Die if stats reach 0
     if (this.hunger <= 0 || this.thirst <= 0 || this.health <= 0) {
@@ -196,14 +250,15 @@ export class Squibble {
     if (this.isBreeding) {
       this.seekingMate = false;
     } else {
-      // Check if we should seek a mate (must be healthy, well-fed, well-hydrated, and cooldown expired)
+      // Check if we should seek a mate (must be healthy, well-fed, well-hydrated, cooldown expired, AND in fertile age)
       // Squibbles prioritize survival over reproduction
       // This is re-evaluated every frame, so seekingMate will turn back on automatically
       // when conditions are met again (e.g., after eating and getting full)
       const canSeekMate = this.health >= this.matingHealthThreshold &&
                          this.hunger >= this.matingHungerThreshold &&
                          this.thirst >= this.matingThirstThreshold &&
-                         this.breedingCooldown <= 0;
+                         this.breedingCooldown <= 0 &&
+                         this.isInFertileAge(); // Must be adult (not too young or old)
       
       this.seekingMate = canSeekMate;
     }
@@ -258,9 +313,13 @@ export class Squibble {
     }
     
     // Move (unless breeding)
+    // Pregnancy slows movement (down to 50% at full term)
+    const pregnancySpeedPenalty = this.isPregnant ? (1 - pregnancyProgress * 0.5) : 1.0;
+    const effectiveSpeed = this.speed * pregnancySpeedPenalty;
+    
     if (!this.isBreeding) {
-      this.x += Math.cos(this.direction) * this.speed;
-      this.y += Math.sin(this.direction) * this.speed;
+      this.x += Math.cos(this.direction) * effectiveSpeed;
+      this.y += Math.sin(this.direction) * effectiveSpeed;
     }
     
     // Bounce off boundaries
@@ -276,6 +335,10 @@ export class Squibble {
   }
   
   getStats() {
+    // Convert frame-based age to seconds (assuming ~60fps)
+    const ageInSeconds = this.age / 60;
+    const maxAgeInSeconds = this.maxAge / 60;
+    
     return {
       hunger: this.hunger,
       thirst: this.thirst,
@@ -283,7 +346,8 @@ export class Squibble {
       vision: this.vision,
       speed: this.speed,
       speed_multiplier: 1.0 + (this.speed - 1.0) * 0.5,
-      age: this.age,
+      age: ageInSeconds,
+      max_age: maxAgeInSeconds,
       alive: this.alive,
       seeking_food: this.hunger < this.hungerThreshold,
       seeking_mate: this.seekingMate,
@@ -292,7 +356,19 @@ export class Squibble {
       gender: this.gender,
       min_attractiveness: this.minAttractiveness,
       breeding_cooldown: this.breedingCooldown,
+      is_pregnant: this.isPregnant,
+      pregnancy_progress: this.isPregnant ? (1 - this.pregnancyTimeRemaining / this.pregnancyDuration) : 0,
+      pregnancy_time_remaining: this.pregnancyTimeRemaining,
     };
+  }
+  
+  /**
+   * Check if squibble is in fertile age (middle 3/5 of life)
+   */
+  isInFertileAge(): boolean {
+    const youngLimit = this.maxAge * 0.2; // First 1/5
+    const oldLimit = this.maxAge * 0.8;   // Last 1/5
+    return this.age >= youngLimit && this.age <= oldLimit;
   }
   
   /**
@@ -305,6 +381,12 @@ export class Squibble {
     
     // Must be opposite genders
     if (this.gender === other.gender) return false;
+    
+    // Both must be in fertile age (not too young or too old)
+    if (!this.isInFertileAge() || !other.isInFertileAge()) return false;
+    
+    // Pregnant squibbles cannot breed
+    if (this.isPregnant || other.isPregnant) return false;
     
     // If not allowing interruption, check cooldowns and breeding status
     if (!allowInterruption) {
@@ -363,5 +445,46 @@ export class Squibble {
    */
   isBreedingComplete(): boolean {
     return this.isBreeding && this.breedingTimeRemaining <= 0;
+  }
+  
+  /**
+   * Start pregnancy (called after successful mating for females)
+   */
+  startPregnancy(father: Squibble): void {
+    if (this.gender !== 'female') return;
+    this.isPregnant = true;
+    
+    // Variable gestation: 20-30 seconds base
+    const baseGestation = 20 + Math.random() * 10;
+    
+    // Cap gestation at remaining lifespan (in seconds)
+    const remainingLifeSeconds = (this.maxAge - this.age) / 60;
+    this.pregnancyDuration = Math.min(baseGestation, remainingLifeSeconds - 1);
+    this.pregnancyTimeRemaining = this.pregnancyDuration;
+    this.pregnancyFather = father;
+  }
+  
+  /**
+   * Check if ready to give birth
+   */
+  isReadyToGiveBirth(): boolean {
+    return this.isPregnant && this.pregnancyTimeRemaining <= 0;
+  }
+  
+  /**
+   * Complete pregnancy (give birth)
+   */
+  giveBirth(): Squibble | null {
+    if (!this.isPregnant || !this.pregnancyFather) return null;
+    
+    // Create baby at mother's position
+    const baby = new Squibble(this.x, this.y, undefined, this, this.pregnancyFather);
+    
+    // Reset pregnancy state
+    this.isPregnant = false;
+    this.pregnancyTimeRemaining = 0;
+    this.pregnancyFather = null;
+    
+    return baby;
   }
 }

@@ -28,7 +28,7 @@ export class Food {
   public remainingSlots: number;
   
   public eaten: boolean = false;
-  private eatenTime: number = 0;
+  public eatenTime: number = 0;
   public lastRegenTime: number = 0;
   
   private regenDelay: number = 12.0;

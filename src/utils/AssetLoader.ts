@@ -79,6 +79,14 @@ export class AssetLoader {
         console.warn('Love icon not found, will skip');
       }
       
+      // Load fetus icon for pregnancy
+      try {
+        const fetusIcon = await Assets.load('Assets/fetus.png');
+        this.iconTextures.set('fetus', fetusIcon);
+      } catch (e) {
+        console.warn('Fetus icon not found, will skip');
+      }
+      
       // health.png doesn't exist, so we'll skip it
       // If you add it later, uncomment this:
       /*

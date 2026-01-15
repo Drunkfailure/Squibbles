@@ -41,29 +41,43 @@ export class SquibbleManager {
   }
   
   /**
-   * Check for breeding opportunities and create offspring
+   * Check for births (pregnant females ready to give birth)
+   */
+  private processPregnancies(): void {
+    const newBabies: Squibble[] = [];
+    
+    for (const squibble of this.squibbles) {
+      if (squibble.isReadyToGiveBirth()) {
+        const baby = squibble.giveBirth();
+        if (baby) {
+          newBabies.push(baby);
+        }
+      }
+    }
+    
+    // Add all new babies
+    for (const baby of newBabies) {
+      this.squibbles.push(baby);
+    }
+  }
+  
+  /**
+   * Check for breeding opportunities and start pregnancies
    */
   private processBreeding(): void {
-    // First, check for completed breeding (10 seconds elapsed)
+    // First, check for completed breeding (10 seconds elapsed) - starts pregnancy
     for (const squibble of this.squibbles) {
       if (squibble.isBreeding && squibble.isBreedingComplete() && squibble.breedingPartner) {
         const partner = squibble.breedingPartner;
         
-        // Create offspring
-        const offspringX = (squibble.x + partner.x) / 2;
-        const offspringY = (squibble.y + partner.y) / 2;
+        // Determine which is female
+        const female = squibble.gender === 'female' ? squibble : partner;
+        const male = squibble.gender === 'male' ? squibble : partner;
         
-        // Add small random offset to prevent stacking
-        const offsetX = (Math.random() - 0.5) * 10;
-        const offsetY = (Math.random() - 0.5) * 10;
-        
-        this.addSquibble(
-          offspringX + offsetX,
-          offspringY + offsetY,
-          undefined,
-          squibble,
-          partner
-        );
+        // Female becomes pregnant (baby comes later after gestation)
+        if (female && male && !female.isPregnant) {
+          female.startPregnancy(male);
+        }
         
         // Complete breeding for both
         squibble.completeBreeding();
@@ -171,6 +185,9 @@ export class SquibbleManager {
     
     // Process breeding
     this.processBreeding();
+    
+    // Process pregnancies (births)
+    this.processPregnancies();
     
     // Remove dead squibbles
     this.squibbles = this.squibbles.filter(s => s.alive);

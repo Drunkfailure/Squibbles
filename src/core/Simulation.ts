@@ -14,6 +14,8 @@ import { TerrainRenderer } from '../terrain/TerrainRenderer';
 import { Renderer } from './Renderer';
 import { EventManager } from './EventManager';
 import { SimulationUI } from '../ui/SimulationUI';
+import { StatsRecorder } from '../stats/StatsRecorder';
+import { StatsGraphRenderer } from '../stats/StatsGraphRenderer';
 
 export class Simulation extends Game {
   private squibbleManager: SquibbleManager;
@@ -39,6 +41,13 @@ export class Simulation extends Game {
   private renderer: Renderer;
   private ui: SimulationUI;
   
+  // Stats tracking
+  private statsRecorder: StatsRecorder;
+  private statsGraphRenderer: StatsGraphRenderer;
+  private totalBirths: number = 0;
+  private totalDeaths: number = 0;
+  private lastAliveCount: number = 0;
+  
   constructor(settings: GameSettings) {
     super(settings);
     
@@ -50,6 +59,10 @@ export class Simulation extends Game {
     );
     this.terrainRenderer = new TerrainRenderer();
     this.ui = new SimulationUI(settings.screenWidth, settings.screenHeight);
+    
+    // Stats tracking
+    this.statsRecorder = new StatsRecorder(1.0); // Record every 1 second
+    this.statsGraphRenderer = new StatsGraphRenderer(this.statsRecorder);
     
     // Create containers
     this.terrainContainer = new Container();
@@ -147,10 +160,78 @@ export class Simulation extends Game {
         this.waterMap || undefined
       );
       this.foodManager.update(dt);
+      
+      // Track stats
+      this.updateStatsTracking(dt);
     }
     
     // Render
     this.draw();
+  }
+  
+  private updateStatsTracking(dt: number): void {
+    const squibbles = this.squibbleManager.getAlive();
+    const currentAlive = squibbles.length;
+    
+    // Track births and deaths
+    if (currentAlive > this.lastAliveCount) {
+      this.totalBirths += currentAlive - this.lastAliveCount;
+    } else if (currentAlive < this.lastAliveCount) {
+      this.totalDeaths += this.lastAliveCount - currentAlive;
+    }
+    this.lastAliveCount = currentAlive;
+    
+    // Calculate detailed stats
+    const stats: Record<string, number> = {
+      population: currentAlive,
+      births: this.totalBirths,
+      deaths: this.totalDeaths,
+    };
+    
+    if (currentAlive > 0) {
+      let totalHunger = 0, totalThirst = 0, totalHealth = 0;
+      let totalSpeed = 0, totalVision = 0;
+      let totalAttractiveness = 0, totalVirility = 0, totalMaxAge = 0;
+      let seekingFood = 0, seekingMate = 0, pregnant = 0, breeding = 0;
+      let males = 0, females = 0;
+      
+      for (const s of squibbles) {
+        totalHunger += s.hunger;
+        totalThirst += s.thirst;
+        totalHealth += s.health;
+        totalSpeed += s.speed;
+        totalVision += s.vision;
+        totalAttractiveness += s.attractiveness;
+        totalVirility += s.virility;
+        totalMaxAge += s.maxAge / 60; // Convert to seconds
+        
+        if (s.hunger < 70) seekingFood++;
+        if (s.seekingMate) seekingMate++;
+        if (s.isPregnant) pregnant++;
+        if (s.isBreeding) breeding++;
+        if (s.gender === 'male') males++;
+        else females++;
+      }
+      
+      stats.avg_hunger = totalHunger / currentAlive;
+      stats.avg_thirst = totalThirst / currentAlive;
+      stats.avg_health = totalHealth / currentAlive;
+      stats.avg_speed = totalSpeed / currentAlive;
+      stats.avg_vision = totalVision / currentAlive;
+      stats.avg_attractiveness = totalAttractiveness / currentAlive;
+      stats.avg_virility = totalVirility / currentAlive;
+      stats.avg_max_age = totalMaxAge / currentAlive;
+      stats.seeking_food_count = seekingFood;
+      stats.seeking_mate_count = seekingMate;
+      stats.pregnant_count = pregnant;
+      stats.breeding_count = breeding;
+      stats.male_count = males;
+      stats.female_count = females;
+    }
+    
+    stats.available_food = this.foodManager.getFoodCount();
+    
+    this.statsRecorder.update(dt, stats);
   }
   
   private handleCameraMovement(): void {
@@ -332,6 +413,10 @@ export class Simulation extends Game {
           this.worldData?.cols
         );
         this.selectedSquibble = null;
+        this.statsRecorder.clear();
+        this.totalBirths = 0;
+        this.totalDeaths = 0;
+        this.lastAliveCount = 0;
         this.spawnInitialSquibbles();
       } else if (e.code === 'KeyA') {
         // Add a new squibble
@@ -341,6 +426,9 @@ export class Simulation extends Game {
       } else if (e.code === 'KeyI') {
         // Toggle controls
         this.ui.toggleControls();
+      } else if (e.code === 'KeyG') {
+        // Show stats graphs
+        this.statsGraphRenderer.show();
       } else if (e.code === 'Escape') {
         // Deselect squibble (handled in parent class, but also clear selection)
         this.selectedSquibble = null;
@@ -448,34 +536,49 @@ export class Simulation extends Game {
     zoom: number
   ): void {
     const iconSize = 12 * zoom;
-    let iconY = y - radius - 25 * zoom;
+    const iconSpacing = 2 * zoom;
+    const iconY = y - radius - 25 * zoom;
     
-    // Draw hunger icon if hungry
-    if (squibble.hunger < 70.0) {
-      const hungerIcon = AssetLoader.getIconTexture('hunger');
-      if (hungerIcon) {
-        const sprite = new Sprite(hungerIcon);
+    // Collect all icons to display
+    const icons: string[] = [];
+    
+    // Pregnant icon
+    if (squibble.isPregnant) {
+      icons.push('fetus');
+    }
+    
+    // Hunger icon (show when below 50)
+    if (squibble.hunger < 50.0) {
+      icons.push('hunger');
+    }
+    
+    // Thirst icon - use moon as placeholder for now (show when below 50)
+    if (squibble.thirst < 50.0) {
+      icons.push('thirst');
+    }
+    
+    // Health icon (show when below 50)
+    if (squibble.health < 50) {
+      icons.push('health');
+    }
+    
+    // Calculate total width to center icons
+    const totalWidth = icons.length * iconSize + (icons.length - 1) * iconSpacing;
+    let iconX = x - totalWidth / 2 + iconSize / 2;
+    
+    // Draw each icon
+    for (const iconName of icons) {
+      const texture = AssetLoader.getIconTexture(iconName);
+      if (texture) {
+        const sprite = new Sprite(texture);
         sprite.width = iconSize;
         sprite.height = iconSize;
         sprite.anchor.set(0.5);
-        sprite.x = x;
+        sprite.x = iconX;
         sprite.y = iconY;
         this.entityContainer.addChild(sprite);
       }
-    }
-    
-    // Draw health icon if health is low
-    if (squibble.health < 50) {
-      const healthIcon = AssetLoader.getIconTexture('health');
-      if (healthIcon) {
-        const sprite = new Sprite(healthIcon);
-        sprite.width = iconSize;
-        sprite.height = iconSize;
-        sprite.anchor.set(0.5);
-        sprite.x = x;
-        sprite.y = iconY - iconSize - 2 * zoom;
-        this.entityContainer.addChild(sprite);
-      }
+      iconX += iconSize + iconSpacing;
     }
   }
   
