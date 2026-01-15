@@ -4,7 +4,7 @@ A real-time creature simulation where Squibbles navigate a procedurally generate
 
 ## TypeScript Version
 
-This project has been fully rewritten from Python/Pygame to TypeScript for web deployment.
+This project has been fully rewritten from Python/Pygame to TypeScript for web deployment as of version v0.8.
 
 ### Status
 
