@@ -1,0 +1,20 @@
+{
+  "name": "squibbles",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Squibbles Evolution Simulation - TypeScript Rewrite",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "pixi.js": "^7.3.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "typescript": "^5.3.3",
+    "vite": "^5.0.8"
+  }
+}

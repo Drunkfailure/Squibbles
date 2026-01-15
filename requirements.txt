@@ -1,8 +1,0 @@
-pygame>=2.0.0
-pygame-gui>=0.6.0 
-# Optional GPU/array libraries used if available (not required to run)
-# numpy is used for CPU fallback terrain generation
-numpy>=1.22
-# The following are optional; install manually if you want GPU support:
-# moderngl>=5.8.0  # for advanced OpenGL rendering (not required yet)
-# cupy-cuda12x     # pick the wheel matching your CUDA version (Windows: 12.x/11.x)
