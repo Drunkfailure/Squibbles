@@ -144,18 +144,12 @@ export class LoadingScreen {
   }
   
   async runLoadingSequence(): Promise<void> {
-    for (const [taskName, targetProgress] of this.tasks) {
-      this.updateProgress(taskName, targetProgress);
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
-      // Handle quit
-      const canvas = (this.app as any).canvas || (this.app as any).view;
-      if (canvas && canvas.parentElement === null) {
-        break;
-      }
-    }
-    
-    await new Promise(resolve => setTimeout(resolve, 200));
+    // This is now handled by actual progress updates from simulation
+    // Keep for backwards compatibility but don't do anything
+  }
+  
+  getApp(): Application {
+    return this.app;
   }
   
   cleanup(): void {

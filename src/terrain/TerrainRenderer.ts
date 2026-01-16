@@ -27,13 +27,15 @@ export class TerrainRenderer {
         const x = c * tileSize;
         const y = r * tileSize;
         
-        if (waterMask[idx]) {
+        const biome = biomeGrid[idx] as Biome;
+        
+        // Check if water (either from biome or legacy waterMask)
+        if (biome === Biome.WATER || waterMask[idx]) {
           // Draw water
           ctx.fillStyle = `rgb(${WATER_COLOR[0]}, ${WATER_COLOR[1]}, ${WATER_COLOR[2]})`;
           ctx.fillRect(x, y, tileSize, tileSize);
         } else {
           // Draw biome - try to use texture, fallback to color
-          const biome = biomeGrid[idx] as Biome;
           const biomeNames: Record<Biome, string> = {
             [Biome.PLAINS]: 'plains',
             [Biome.FOREST]: 'forest',
@@ -41,7 +43,7 @@ export class TerrainRenderer {
             [Biome.TUNDRA]: 'tundra',
           };
           const biomeName = biomeNames[biome];
-          const texture = AssetLoader.getTerrainTexture(biomeName);
+          const texture = biomeName ? AssetLoader.getTerrainTexture(biomeName) : null;
           
           if (texture) {
             // Draw texture

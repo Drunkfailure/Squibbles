@@ -62,13 +62,20 @@ export class AssetLoader {
       // Terrain floor textures don't exist in the assets folder
       // We'll use color fallbacks instead, so skip loading these
       
-      // Load status icons (only hunger.png exists, health.png doesn't)
+      // Load status icons
       try {
         const hungerIcon = await Assets.load('Assets/hunger.png');
         this.iconTextures.set('hunger', hungerIcon);
       } catch (e) {
-        // Icon doesn't exist, that's okay - we'll skip drawing it
         console.debug('Hunger icon not found, will skip');
+      }
+      
+      // Load thirst icon
+      try {
+        const thirstIcon = await Assets.load('Assets/thirst.png');
+        this.iconTextures.set('thirst', thirstIcon);
+      } catch (e) {
+        console.warn('Thirst icon not found, will skip');
       }
       
       // Load love icon for breeding

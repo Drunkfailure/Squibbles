@@ -38,14 +38,28 @@ async function main() {
     );
     await loadingScreen.initialize();
     
-    // Simulate loading progress
-    await loadingScreen.runLoadingSequence();
+    // Create simulation first (but don't initialize yet)
+    const simulation = new Simulation(settings);
     
+    // Create progress callback that updates loading screen
+    const updateProgress = (progress: number, message: string) => {
+      loadingScreen.updateProgress(message, progress);
+      // Force a render frame
+      if (loadingScreen.getApp()) {
+        loadingScreen.getApp().render();
+      }
+    };
+    
+    // Start with initial progress
+    updateProgress(0, 'Initializing simulation...');
+    
+    // Initialize simulation with progress updates
+    await simulation.initialize(updateProgress);
+    
+    // Clean up loading screen
     loadingScreen.cleanup();
     
-    // Create and initialize simulation
-    const simulation = new Simulation(settings);
-    await simulation.initialize();
+    // Start simulation
     simulation.start();
     
     // Handle window resize

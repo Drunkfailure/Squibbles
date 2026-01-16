@@ -219,6 +219,20 @@ export const POLYGENIC_TRAITS: Record<string, PolygenicTrait> = {
     baseValue: 100,
     outputRange: [70, 130],
   },
+  litterSize: {
+    name: 'Litter Size',
+    lociCount: 5,
+    lociRange: [-0.3, 0.3],
+    baseValue: 2.0, // Average 2 babies
+    outputRange: [1.0, 4.0], // Range 1-4 babies on average
+  },
+  gestationDuration: {
+    name: 'Gestation Duration',
+    lociCount: 4,
+    lociRange: [-2, 2], // Seconds per locus
+    baseValue: 25.0, // 25 seconds base
+    outputRange: [15.0, 35.0], // 15-35 seconds
+  },
 };
 
 /**
@@ -320,6 +334,8 @@ export interface Genome {
     maxAge: PolygenicGenotype;
     hungerCapacity: PolygenicGenotype;
     thirstCapacity: PolygenicGenotype;
+    litterSize: PolygenicGenotype;
+    gestationDuration: PolygenicGenotype;
   };
   
   // Multi-allele traits (discrete visual characteristics)
@@ -365,6 +381,8 @@ export function generateRandomGenome(): Genome {
       maxAge: randomPolygenicGenotype(POLYGENIC_TRAITS.maxAge),
       hungerCapacity: randomPolygenicGenotype(POLYGENIC_TRAITS.hungerCapacity),
       thirstCapacity: randomPolygenicGenotype(POLYGENIC_TRAITS.thirstCapacity),
+      litterSize: randomPolygenicGenotype(POLYGENIC_TRAITS.litterSize),
+      gestationDuration: randomPolygenicGenotype(POLYGENIC_TRAITS.gestationDuration),
     },
     multiAllele: {
       hornStyle: randomMultiAlleleGenotype(MULTI_ALLELE_TRAITS.hornStyle),
@@ -400,6 +418,8 @@ export function inheritGenome(
       maxAge: inheritPolygenic(parent1.polygenic.maxAge, parent2.polygenic.maxAge, POLYGENIC_TRAITS.maxAge, mutationConfig),
       hungerCapacity: inheritPolygenic(parent1.polygenic.hungerCapacity, parent2.polygenic.hungerCapacity, POLYGENIC_TRAITS.hungerCapacity, mutationConfig),
       thirstCapacity: inheritPolygenic(parent1.polygenic.thirstCapacity, parent2.polygenic.thirstCapacity, POLYGENIC_TRAITS.thirstCapacity, mutationConfig),
+      litterSize: inheritPolygenic(parent1.polygenic.litterSize, parent2.polygenic.litterSize, POLYGENIC_TRAITS.litterSize, mutationConfig),
+      gestationDuration: inheritPolygenic(parent1.polygenic.gestationDuration, parent2.polygenic.gestationDuration, POLYGENIC_TRAITS.gestationDuration, mutationConfig),
     },
     multiAllele: {
       hornStyle: inheritMultiAllele(parent1.multiAllele.hornStyle, parent2.multiAllele.hornStyle, MULTI_ALLELE_TRAITS.hornStyle, mutationConfig),
@@ -430,6 +450,8 @@ export interface ExpressedPhenotypes {
   maxAge: number;
   hungerCapacity: number;
   thirstCapacity: number;
+  litterSize: number;
+  gestationDuration: number;
   
   // Visual traits (strings)
   hornStyle: string;
@@ -456,6 +478,8 @@ export function expressGenome(genome: Genome): ExpressedPhenotypes {
     maxAge: Math.round(getPolygenicPhenotype(POLYGENIC_TRAITS.maxAge, genome.polygenic.maxAge)),
     hungerCapacity: getPolygenicPhenotype(POLYGENIC_TRAITS.hungerCapacity, genome.polygenic.hungerCapacity),
     thirstCapacity: getPolygenicPhenotype(POLYGENIC_TRAITS.thirstCapacity, genome.polygenic.thirstCapacity),
+    litterSize: getPolygenicPhenotype(POLYGENIC_TRAITS.litterSize, genome.polygenic.litterSize),
+    gestationDuration: getPolygenicPhenotype(POLYGENIC_TRAITS.gestationDuration, genome.polygenic.gestationDuration),
     
     hornStyle: getMultiAllelePhenotype(MULTI_ALLELE_TRAITS.hornStyle, genome.multiAllele.hornStyle),
     eyeType: getMultiAllelePhenotype(MULTI_ALLELE_TRAITS.eyeType, genome.multiAllele.eyeType),

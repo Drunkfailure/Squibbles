@@ -131,7 +131,7 @@ export class SimulationUI {
     if (!squibble) return;
     
     const panelWidth = 280;
-    const panelHeight = 480;
+    const panelHeight = 650; // Increased to accommodate all stats including new reproduction traits
     const panelX = this.screenWidth - panelWidth - 10;
     const panelY = 10;
     
@@ -172,7 +172,12 @@ export class SimulationUI {
       `  Virility: ${(stats.virility * 100).toFixed(1)}%`,
       `  Size: ${(stats.size * 100).toFixed(0)}%`,
       '',
-      'Breeding:',
+      'Reproduction:',
+      `  Litter Size: ${stats.litter_size?.toFixed(1) || 'N/A'} (avg)`,
+      `  Gestation: ${stats.gestation_duration?.toFixed(1) || 'N/A'}s`,
+      `  Multi-baby Pregnancies: ${stats.multi_baby_pregnancies || 0}`,
+      '',
+      'Breeding Status:',
       `  Cooldown: ${stats.breeding_cooldown > 0 ? stats.breeding_cooldown.toFixed(1) + 's' : 'Ready'}`,
       `  Pregnant: ${stats.is_pregnant ? `Yes (${(stats.pregnancy_progress * 100).toFixed(0)}%)` : 'No'}`,
       '',

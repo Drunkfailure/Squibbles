@@ -83,8 +83,11 @@ export class Squibble {
   // Pregnancy state (females only)
   public isPregnant: boolean = false;
   public pregnancyTimeRemaining: number = 0;
-  public pregnancyDuration: number = 25.0; // Base gestation ~25 seconds (varies)
+  public pregnancyDuration: number = 25.0; // Current pregnancy duration (may be adjusted)
+  public geneticGestationDuration: number = 25.0; // Base genetic gestation duration
   public pregnancyFather: Squibble | null = null; // Store father for genetics
+  public litterSize: number = 2.0; // Average litter size (genetic, 1-4)
+  public multiBabyPregnancyCount: number = 0; // Track pregnancies with 2+ babies for death risk
   
   // State
   public alive: boolean = true;
@@ -116,6 +119,8 @@ export class Squibble {
     this.maxAge = phenotypes.maxAge;
     this.hungerCapacity = phenotypes.hungerCapacity;
     this.thirstCapacity = phenotypes.thirstCapacity;
+    this.litterSize = phenotypes.litterSize;
+    this.geneticGestationDuration = phenotypes.gestationDuration;
     
     // Set initial hunger/thirst to capacity
     this.hunger = this.hungerCapacity;
@@ -387,6 +392,9 @@ export class Squibble {
       size: this.size,
       hunger_capacity: this.hungerCapacity,
       thirst_capacity: this.thirstCapacity,
+      litter_size: this.litterSize,
+      gestation_duration: this.geneticGestationDuration,
+      multi_baby_pregnancies: this.multiBabyPregnancyCount,
       // Visual traits (for future graphical update)
       horn_style: this.hornStyle,
       eye_type: this.eyeType,
@@ -489,12 +497,14 @@ export class Squibble {
     if (this.gender !== 'female') return;
     this.isPregnant = true;
     
-    // Variable gestation: 20-30 seconds base
-    const baseGestation = 20 + Math.random() * 10;
+    // Use genetic gestation duration with some variation (±20%)
+    const baseGestation = this.geneticGestationDuration;
+    const variation = baseGestation * 0.2 * (Math.random() * 2 - 1); // ±20%
+    const gestation = baseGestation + variation;
     
     // Cap gestation at remaining lifespan (in seconds)
     const remainingLifeSeconds = (this.maxAge - this.age) / 60;
-    this.pregnancyDuration = Math.min(baseGestation, remainingLifeSeconds - 1);
+    this.pregnancyDuration = Math.min(gestation, remainingLifeSeconds - 1);
     this.pregnancyTimeRemaining = this.pregnancyDuration;
     this.pregnancyFather = father;
   }
@@ -507,19 +517,105 @@ export class Squibble {
   }
   
   /**
-   * Complete pregnancy (give birth)
+   * Determine actual litter size based on genetic average
+   * Uses Poisson-like distribution centered on litterSize
    */
-  giveBirth(): Squibble | null {
-    if (!this.isPregnant || !this.pregnancyFather) return null;
+  private determineLitterSize(): number {
+    // Use the genetic average as the mean for a Poisson-like distribution
+    // Clamp to 1-4 range
+    const mean = this.litterSize;
     
-    // Create baby at mother's position
-    const baby = new Squibble(this.x, this.y, undefined, this, this.pregnancyFather);
+    // Simple approximation: use normal distribution, then round and clamp
+    // For small means, we'll use a more direct approach
+    let total = 0;
+    const samples = 10; // Sample multiple times for smoother distribution
+    for (let i = 0; i < samples; i++) {
+      // Generate value around mean with some variance
+      const value = mean + (Math.random() - 0.5) * 1.5;
+      total += value;
+    }
+    const average = total / samples;
+    
+    // Round to nearest integer and clamp
+    let litter = Math.round(average);
+    litter = Math.max(1, Math.min(4, litter));
+    
+    return litter;
+  }
+  
+  /**
+   * Calculate childbirth death risk based on litter size and pregnancy history
+   */
+  private calculateChildbirthDeathRisk(litterSize: number): number {
+    // Base risk increases with litter size
+    // 1 baby: 0% risk (safe)
+    // 2 babies: 5% risk
+    // 3 babies: 15% risk
+    // 4 babies: 30% risk
+    let baseRisk = 0;
+    if (litterSize === 2) {
+      baseRisk = 0.05; // 5%
+    } else if (litterSize === 3) {
+      baseRisk = 0.15; // 15%
+    } else if (litterSize >= 4) {
+      baseRisk = 0.30; // 30%
+    }
+    // 1 baby has 0% risk (no risk for single births)
+    
+    // Additional risk from previous multi-baby pregnancies
+    // Each previous multi-baby pregnancy adds 5% risk
+    const historyRisk = this.multiBabyPregnancyCount * 0.05;
+    
+    // Total risk (capped at 80%)
+    const totalRisk = Math.min(0.8, baseRisk + historyRisk);
+    
+    return totalRisk;
+  }
+  
+  /**
+   * Complete pregnancy (give birth)
+   * Returns array of babies (can be 1-4)
+   * May kill the mother if risk is high
+   */
+  giveBirth(): Squibble[] {
+    if (!this.isPregnant || !this.pregnancyFather) return [];
+    
+    // Determine actual litter size
+    const actualLitterSize = this.determineLitterSize();
+    
+    // Track if this is a multi-baby pregnancy
+    if (actualLitterSize >= 2) {
+      this.multiBabyPregnancyCount++;
+    }
+    
+    // Calculate death risk
+    const deathRisk = this.calculateChildbirthDeathRisk(actualLitterSize);
+    
+    // Check if mother dies during childbirth
+    if (Math.random() < deathRisk) {
+      // Mother dies
+      this.alive = false;
+      // Still give birth to babies before dying
+    }
+    
+    // Create babies at mother's position (slightly spread out)
+    const babies: Squibble[] = [];
+    for (let i = 0; i < actualLitterSize; i++) {
+      // Spread babies slightly (within 10 pixels)
+      const angle = (i / actualLitterSize) * Math.PI * 2;
+      const offset = 5 + Math.random() * 5;
+      const babyX = this.x + Math.cos(angle) * offset;
+      const babyY = this.y + Math.sin(angle) * offset;
+      
+      const baby = new Squibble(babyX, babyY, undefined, this, this.pregnancyFather);
+      babies.push(baby);
+    }
     
     // Reset pregnancy state
     this.isPregnant = false;
     this.pregnancyTimeRemaining = 0;
     this.pregnancyFather = null;
     
-    return baby;
+    return babies;
   }
 }

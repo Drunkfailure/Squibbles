@@ -42,16 +42,17 @@ export class SquibbleManager {
   
   /**
    * Check for births (pregnant females ready to give birth)
+   * Handles multiple births and potential mother death
    */
   private processPregnancies(): void {
     const newBabies: Squibble[] = [];
     
     for (const squibble of this.squibbles) {
       if (squibble.isReadyToGiveBirth()) {
-        const baby = squibble.giveBirth();
-        if (baby) {
-          newBabies.push(baby);
-        }
+        // giveBirth() now returns an array of babies (1-4)
+        // May also kill the mother if childbirth risk is high
+        const babies = squibble.giveBirth();
+        newBabies.push(...babies);
       }
     }
     

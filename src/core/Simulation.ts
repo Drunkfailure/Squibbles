@@ -74,7 +74,7 @@ export class Simulation extends Game {
     this.cameraY = (settings.screenHeight - settings.mapHeight) / 2;
   }
   
-  async initialize(): Promise<void> {
+  async initialize(onProgress?: (progress: number, message: string) => void): Promise<void> {
     await super.initialize();
     
     const app = this.getApp();
@@ -88,24 +88,36 @@ export class Simulation extends Game {
     this.renderer = new Renderer(this.entityContainer);
     
     // Load assets first
+    if (onProgress) {
+      onProgress(10, 'Loading assets...');
+    }
     const { AssetLoader } = await import('../utils/AssetLoader');
     await AssetLoader.loadAll();
     
     // Initialize terrain
-    await this.initTerrain();
+    await this.initTerrain(onProgress);
     
     // Spawn initial squibbles
+    if (onProgress) {
+      onProgress(98, 'Spawning creatures...');
+    }
     this.spawnInitialSquibbles();
+    
+    if (onProgress) {
+      onProgress(100, 'Complete!');
+    }
   }
   
-  private async initTerrain(): Promise<void> {
+  private async initTerrain(onProgress?: (progress: number, message: string) => void): Promise<void> {
     console.log('Generating terrain...');
     
     // Generate world
-    this.worldData = generateWorld(
+    this.worldData = await generateWorld(
       this.settings.mapWidth,
       this.settings.mapHeight,
-      this.settings.terrain
+      this.settings.terrain,
+      undefined,
+      onProgress
     );
     
     // Create water map
@@ -342,16 +354,10 @@ export class Simulation extends Game {
           }
         }
         
-        // Draw mating indicator (heart outline) if seeking mate
-        if (squibble.seekingMate && !squibble.isBreeding) {
-          const heartSize = radius * 1.5 * this.zoomLevel;
-          this.drawHeart(sx, sy - radius - heartSize * 0.3, heartSize, [255, 100, 150]);
-        }
-        
         // Draw health bar
         this.drawHealthBar(sx, sy, radius, squibble.health, this.zoomLevel);
         
-        // Draw status icons
+        // Draw status icons (includes love, hunger, thirst, fetus)
         this.drawStatusIcons(sx, sy, radius, squibble, this.zoomLevel);
         
         // Draw direction indicator
@@ -384,9 +390,14 @@ export class Simulation extends Game {
         selectionRing.drawCircle(sx, sy, radius + 3);
         this.entityContainer.addChild(selectionRing);
       }
-    } else if (this.selectedSquibble && !this.selectedSquibble.alive) {
-      // Selected squibble died, deselect
-      this.selectedSquibble = null;
+    } else {
+      // No selection or squibble died - clear the details panel
+      if (this.selectedSquibble && !this.selectedSquibble.alive) {
+        // Selected squibble died, deselect
+        this.selectedSquibble = null;
+      }
+      // Clear the details panel by passing null
+      this.ui.drawSquibbleDetails(null);
     }
   }
   
@@ -537,14 +548,15 @@ export class Simulation extends Game {
   ): void {
     const iconSize = 12 * zoom;
     const iconSpacing = 2 * zoom;
-    const iconY = y - radius - 25 * zoom;
+    // Position icons above health bar (health bar is at y - radius - 15 * zoom, so icons go above that)
+    const iconY = y - radius - 30 * zoom;
     
-    // Collect all icons to display
+    // Collect all icons to display (order: love, hunger, thirst, fetus)
     const icons: string[] = [];
     
-    // Pregnant icon
-    if (squibble.isPregnant) {
-      icons.push('fetus');
+    // Love icon (seeking mate or breeding)
+    if (squibble.seekingMate || squibble.isBreeding) {
+      icons.push('love');
     }
     
     // Hunger icon (show when below 50)
@@ -552,15 +564,20 @@ export class Simulation extends Game {
       icons.push('hunger');
     }
     
-    // Thirst icon - use moon as placeholder for now (show when below 50)
+    // Thirst icon (show when below 50)
     if (squibble.thirst < 50.0) {
       icons.push('thirst');
     }
     
-    // Health icon (show when below 50)
-    if (squibble.health < 50) {
-      icons.push('health');
+    // Pregnant icon
+    if (squibble.isPregnant) {
+      icons.push('fetus');
     }
+    
+    // Health icon (show when below 50) - commented out since health.png doesn't exist
+    // if (squibble.health < 50) {
+    //   icons.push('health');
+    // }
     
     // Calculate total width to center icons
     const totalWidth = icons.length * iconSize + (icons.length - 1) * iconSpacing;
