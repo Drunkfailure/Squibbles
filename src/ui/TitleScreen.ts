@@ -28,7 +28,6 @@ export class TitleScreen {
   
   // Settings
   private creatureCount: number = 200;
-  private foodCount: number = 600;
   private mapWidth: number = 6000;
   private mapHeight: number = 6000;
   private biomeScale: number = 5;
@@ -242,8 +241,7 @@ export class TitleScreen {
         </div>
         
         <div style="margin-bottom: 15px;">
-          <label>Food Spawns (1-1000):</label>
-          <input type="number" id="food-count" value="600" min="1" max="1000" style="margin-left: 10px; padding: 5px; width: 100px;">
+          <p style="font-size: 12px; color: #aaa; margin-top: 5px;">Food spawns automatically based on biome tiles</p>
         </div>
         
         <div style="margin-bottom: 15px;">
@@ -268,21 +266,19 @@ export class TitleScreen {
     // Setup event handlers
     const sizePreset = document.getElementById('size-preset') as HTMLSelectElement;
     sizePreset.addEventListener('change', () => {
-      const presets: Record<string, { w: number; h: number; c: number; f: number }> = {
-        small: { w: 6000, h: 6000, c: 200, f: 600 },
-        medium: { w: 7000, h: 7000, c: 300, f: 800 },
-        large: { w: 8000, h: 8000, c: 400, f: 1000 },
+      const presets: Record<string, { w: number; h: number; c: number }> = {
+        small: { w: 6000, h: 6000, c: 200 },
+        medium: { w: 7000, h: 7000, c: 300 },
+        large: { w: 8000, h: 8000, c: 400 },
       };
       const preset = presets[sizePreset.value];
       if (preset) {
         this.mapWidth = preset.w;
         this.mapHeight = preset.h;
         this.creatureCount = preset.c;
-        this.foodCount = preset.f;
         (document.getElementById('map-width') as HTMLInputElement).value = String(preset.w);
         (document.getElementById('map-height') as HTMLInputElement).value = String(preset.h);
         (document.getElementById('creature-count') as HTMLInputElement).value = String(preset.c);
-        (document.getElementById('food-count') as HTMLInputElement).value = String(preset.f);
       }
     });
     
@@ -318,12 +314,10 @@ export class TitleScreen {
   
   private getSettingsAndStart(): void {
     const creatureInput = document.getElementById('creature-count') as HTMLInputElement;
-    const foodInput = document.getElementById('food-count') as HTMLInputElement;
     const widthInput = document.getElementById('map-width') as HTMLInputElement;
     const heightInput = document.getElementById('map-height') as HTMLInputElement;
     
     this.creatureCount = Math.max(1, Math.min(1000, parseInt(creatureInput.value) || 200));
-    this.foodCount = Math.max(1, Math.min(1000, parseInt(foodInput.value) || 600));
     this.mapWidth = Math.max(1000, Math.min(10000, parseInt(widthInput.value) || 6000));
     this.mapHeight = Math.max(1000, Math.min(10000, parseInt(heightInput.value) || 6000));
     
@@ -333,7 +327,6 @@ export class TitleScreen {
       screenWidth: window.innerWidth,
       screenHeight: window.innerHeight,
       creatureCount: this.creatureCount,
-      foodCount: this.foodCount,
       terrain: {
         biome_scale: this.biomeScale,
         biome_weights: { ...this.biomeWeights },

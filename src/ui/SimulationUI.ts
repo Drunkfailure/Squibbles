@@ -154,6 +154,7 @@ export class SimulationUI {
     const lines: string[] = [
       '=== Selected Squibble ===',
       '',
+      `ID: ${stats.id || 'N/A'}`,
       `Gender: ${stats.gender || 'unknown'}`,
       `Age: ${stats.age.toFixed(1)}s / ${stats.max_age.toFixed(1)}s`,
       '',
@@ -165,6 +166,10 @@ export class SimulationUI {
       'Traits:',
       `  Speed: ${stats.speed.toFixed(2)}`,
       `  Vision: ${stats.vision.toFixed(1)}`,
+      `  Intelligence: ${((stats.intelligence ?? 0.5) * 100).toFixed(1)}%`,
+      `  Swim: ${((stats.swim ?? 0.5) * 100).toFixed(1)}%`,
+      `  Metabolism: ${((stats.metabolism ?? 0.5) * 100).toFixed(1)}%`,
+      `  Wet: ${(stats.wet_timer ?? 0) > 0 ? (stats.wet_timer ?? 0).toFixed(1) + 's' : 'No'}`,
       '',
       'Breeding:',
       `  Attractiveness: ${(stats.attractiveness * 100).toFixed(1)}%`,

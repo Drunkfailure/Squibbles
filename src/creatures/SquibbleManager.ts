@@ -30,8 +30,8 @@ export class SquibbleManager {
       const dy = other.y - seeker.y;
       const distance = Math.sqrt(dx * dx + dy * dy);
       
-      // Must be within vision range and closer than current best
-      if (distance <= seeker.vision && distance < nearestDistance) {
+      // Must be within vision range and closer than current best (effectiveVision includes forest penalty)
+      if (distance <= (seeker.effectiveVision ?? seeker.vision) && distance < nearestDistance) {
         nearestMate = other;
         nearestDistance = distance;
       }
@@ -177,11 +177,12 @@ export class SquibbleManager {
     screenWidth: number,
     screenHeight: number,
     foodManager?: FoodManager,
-    waterMap?: WaterMap
+    waterMap?: WaterMap,
+    getBiomeAt?: (x: number, y: number) => number
   ): void {
     // Update all squibbles
     for (const squibble of this.squibbles) {
-      squibble.update(dt, screenWidth, screenHeight, foodManager, waterMap, this);
+      squibble.update(dt, screenWidth, screenHeight, foodManager, waterMap, this, getBiomeAt);
     }
     
     // Process breeding

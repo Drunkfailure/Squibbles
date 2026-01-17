@@ -130,7 +130,7 @@ export class LoadingScreen {
     const settingsText = [
       `Map Size: ${this.settings.mapWidth} x ${this.settings.mapHeight}`,
       `Creatures: ${this.settings.creatureCount}`,
-      `Food Items: ${this.settings.foodCount}`,
+      `Food: Auto-spawned by biome`,
     ];
     
     let yOffset = this.screenHeight / 2 + 100;

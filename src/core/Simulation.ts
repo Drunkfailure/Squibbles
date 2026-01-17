@@ -38,7 +38,7 @@ export class Simulation extends Game {
   private terrainContainer: Container;
   private entityContainer: Container;
   private uiContainer: Container;
-  private renderer: Renderer;
+  private renderer!: Renderer; // Initialized in initialize()
   private ui: SimulationUI;
   
   // Stats tracking
@@ -48,14 +48,16 @@ export class Simulation extends Game {
   private totalDeaths: number = 0;
   private lastAliveCount: number = 0;
   
+  /** Base size for tree/food sprites in world units. Smaller than tile so they feel placed in the world, not filling it. */
+  private static readonly TREE_FOOD_SPRITE_WORLD_SIZE = 44;
+  
   constructor(settings: GameSettings) {
     super(settings);
     
     this.squibbleManager = new SquibbleManager();
     this.foodManager = new FoodManager(
       settings.mapWidth,
-      settings.mapHeight,
-      settings.foodCount
+      settings.mapHeight
     );
     this.terrainRenderer = new TerrainRenderer();
     this.ui = new SimulationUI(settings.screenWidth, settings.screenHeight);
@@ -131,11 +133,12 @@ export class Simulation extends Game {
     // Render terrain
     this.terrainRenderer.createTerrainSprite(this.worldData, this.terrainContainer);
     
-    // Respawn foods with biome awareness
+    // Spawn foods with biome awareness
     this.foodManager.spawnFood(
       this.worldData.biomeGrid,
       this.worldData.tileSize,
-      this.worldData.cols
+      this.worldData.cols,
+      this.worldData.rows
     );
     
     console.log('Terrain generation complete');
@@ -164,12 +167,21 @@ export class Simulation extends Game {
     
     if (!this.isPaused()) {
       // Update simulation systems
+      const getBiomeAt = this.worldData
+        ? (x: number, y: number) => {
+            const w = this.worldData!;
+            const cx = Math.max(0, Math.min(w.cols - 1, Math.floor(x / w.tileSize)));
+            const cy = Math.max(0, Math.min(w.rows - 1, Math.floor(y / w.tileSize)));
+            return w.biomeGrid[cy * w.cols + cx];
+          }
+        : undefined;
       this.squibbleManager.updateAll(
         dt,
         this.settings.mapWidth,
         this.settings.mapHeight,
         this.foodManager,
-        this.waterMap || undefined
+        this.waterMap || undefined,
+        getBiomeAt
       );
       this.foodManager.update(dt);
       
@@ -203,7 +215,7 @@ export class Simulation extends Game {
     if (currentAlive > 0) {
       let totalHunger = 0, totalThirst = 0, totalHealth = 0;
       let totalSpeed = 0, totalVision = 0;
-      let totalAttractiveness = 0, totalVirility = 0, totalMaxAge = 0;
+      let totalAttractiveness = 0, totalVirility = 0, totalMaxAge = 0, totalIntelligence = 0, totalSwim = 0, totalMetabolism = 0;
       let seekingFood = 0, seekingMate = 0, pregnant = 0, breeding = 0;
       let males = 0, females = 0;
       
@@ -216,6 +228,9 @@ export class Simulation extends Game {
         totalAttractiveness += s.attractiveness;
         totalVirility += s.virility;
         totalMaxAge += s.maxAge / 60; // Convert to seconds
+        totalIntelligence += s.intelligence;
+        totalSwim += s.swim;
+        totalMetabolism += s.metabolism;
         
         if (s.hunger < 70) seekingFood++;
         if (s.seekingMate) seekingMate++;
@@ -233,6 +248,9 @@ export class Simulation extends Game {
       stats.avg_attractiveness = totalAttractiveness / currentAlive;
       stats.avg_virility = totalVirility / currentAlive;
       stats.avg_max_age = totalMaxAge / currentAlive;
+      stats.avg_intelligence = totalIntelligence / currentAlive;
+      stats.avg_swim = totalSwim / currentAlive;
+      stats.avg_metabolism = totalMetabolism / currentAlive;
       stats.seeking_food_count = seekingFood;
       stats.seeking_mate_count = seekingMate;
       stats.pregnant_count = pregnant;
@@ -298,36 +316,74 @@ export class Simulation extends Game {
       terrainSprite.scale.set(this.zoomLevel);
     }
     
-    // Draw foods (culled to view)
+    // Y-sort: collect trees, food, and squibbles; sort by bottom Y (higher Y = in front)
+    const drawables: Array<{ sortY: number; draw: () => void }> = [];
+    const baseSize = Simulation.TREE_FOOD_SPRITE_WORLD_SIZE;
+    
+    // Decorative trees (smaller than tile, varied scale, jittered position)
+    const decorativeTrees = this.foodManager.getDecorativeTrees();
+    for (const tree of decorativeTrees) {
+      if (tree.x >= viewX && tree.x < viewX + viewW &&
+          tree.y >= viewY && tree.y < viewY + viewH) {
+        const sx = (tree.x - viewX) * this.zoomLevel;
+        const sy = (tree.y - viewY) * this.zoomLevel;
+        const texture = AssetLoader.getFoodTexture('foresttree', 0);
+        const scale = tree.scale ?? 1;
+        const size = baseSize * scale;
+        const flipH = tree.flipH ?? false;
+        drawables.push({
+          sortY: tree.y + size / 2,
+          draw: () => {
+            if (texture) {
+              const sprite = new Sprite(texture);
+              const px = Math.max(1, size * this.zoomLevel);
+              sprite.width = px;
+              sprite.height = px;
+              sprite.anchor.set(0.5);
+              if (flipH) sprite.scale.x = -Math.abs(sprite.scale.x);
+              sprite.x = sx;
+              sprite.y = sy;
+              this.entityContainer.addChild(sprite);
+            }
+          },
+        });
+      }
+    }
+    
+    // Foods (same: smaller than tile, varied scale, jittered position)
     const foods = this.foodManager.getAllFood();
     for (const food of foods) {
       if (food.x >= viewX && food.x < viewX + viewW &&
           food.y >= viewY && food.y < viewY + viewH) {
         const sx = (food.x - viewX) * this.zoomLevel;
         const sy = (food.y - viewY) * this.zoomLevel;
-        
-        // Try to use sprite texture, fallback to circle
-        const stage = food.remainingSlots + 1;
-        const texture = AssetLoader.getFoodTexture(food.species, stage);
-        
-        if (texture) {
-          const sprite = new Sprite(texture);
-          const size = Math.max(1, 32 * this.zoomLevel);
-          sprite.width = size;
-          sprite.height = size;
-          sprite.anchor.set(0.5);
-          sprite.x = sx;
-          sprite.y = sy;
-          this.entityContainer.addChild(sprite);
-        } else {
-          // Fallback to circle
-          const radius = food.radius * this.zoomLevel;
-          this.renderer.drawCircle(sx, sy, radius, [0, 255, 0], 0.8);
-        }
+        const texture = AssetLoader.getFoodTexture(food.species, food.remainingSlots);
+        const scale = food.scale ?? 1;
+        const size = baseSize * scale;
+        const flipH = food.flipH ?? false;
+        drawables.push({
+          sortY: food.y + size / 2,
+          draw: () => {
+            if (texture) {
+              const sprite = new Sprite(texture);
+              const px = Math.max(1, size * this.zoomLevel);
+              sprite.width = px;
+              sprite.height = px;
+              sprite.anchor.set(0.5);
+              if (flipH) sprite.scale.x = -Math.abs(sprite.scale.x);
+              sprite.x = sx;
+              sprite.y = sy;
+              this.entityContainer.addChild(sprite);
+            } else {
+              const radius = food.radius * this.zoomLevel;
+              this.renderer.drawCircle(sx, sy, radius, [0, 255, 0], 0.8);
+            }
+          },
+        });
       }
     }
     
-    // Draw squibbles (culled to view)
+    // Squibbles
     const squibbles = this.squibbleManager.getAlive();
     for (const squibble of squibbles) {
       if (squibble.x >= viewX && squibble.x < viewX + viewW &&
@@ -335,36 +391,37 @@ export class Simulation extends Game {
         const sx = (squibble.x - viewX) * this.zoomLevel;
         const sy = (squibble.y - viewY) * this.zoomLevel;
         const radius = Math.max(1, squibble.radius * this.zoomLevel);
-        
-        // Draw squibble body
-        this.renderer.drawCircle(sx, sy, radius, squibble.color, 1.0);
-        
-        // Draw love icon if breeding
-        if (squibble.isBreeding) {
-          const loveTexture = AssetLoader.getIconTexture('love');
-          if (loveTexture) {
-            const loveSize = radius * 2 * this.zoomLevel;
-            const loveSprite = new Sprite(loveTexture);
-            loveSprite.width = loveSize;
-            loveSprite.height = loveSize;
-            loveSprite.x = sx;
-            loveSprite.y = sy - radius - loveSize * 0.8;
-            loveSprite.anchor.set(0.5, 0.5);
-            this.entityContainer.addChild(loveSprite);
-          }
-        }
-        
-        // Draw health bar
-        this.drawHealthBar(sx, sy, radius, squibble.health, this.zoomLevel);
-        
-        // Draw status icons (includes love, hunger, thirst, fetus)
-        this.drawStatusIcons(sx, sy, radius, squibble, this.zoomLevel);
-        
-        // Draw direction indicator
-        const endX = sx + Math.cos(squibble.direction) * (radius + 5) * this.zoomLevel;
-        const endY = sy + Math.sin(squibble.direction) * (radius + 5) * this.zoomLevel;
-        this.renderer.drawLine(sx, sy, endX, endY, [255, 255, 255], Math.max(1, 2 * this.zoomLevel));
+        drawables.push({
+          sortY: squibble.y + squibble.radius,
+          draw: () => {
+            this.renderer.drawCircle(sx, sy, radius, squibble.color, 1.0);
+            if (squibble.isBreeding) {
+              const loveTexture = AssetLoader.getIconTexture('love');
+              if (loveTexture) {
+                const loveSize = radius * 2 * this.zoomLevel;
+                const loveSprite = new Sprite(loveTexture);
+                loveSprite.width = loveSize;
+                loveSprite.height = loveSize;
+                loveSprite.x = sx;
+                loveSprite.y = sy - radius - loveSize * 0.8;
+                loveSprite.anchor.set(0.5, 0.5);
+                this.entityContainer.addChild(loveSprite);
+              }
+            }
+            this.drawHealthBar(sx, sy, radius, squibble.health, this.zoomLevel);
+            this.drawStatusIcons(sx, sy, radius, squibble, this.zoomLevel);
+            const endX = sx + Math.cos(squibble.direction) * (radius + 5) * this.zoomLevel;
+            const endY = sy + Math.sin(squibble.direction) * (radius + 5) * this.zoomLevel;
+            this.renderer.drawLine(sx, sy, endX, endY, [255, 255, 255], Math.max(1, 2 * this.zoomLevel));
+          },
+        });
       }
+    }
+    
+    // Sort by Y ascending (lower Y = behind, higher Y = in front) and draw
+    drawables.sort((a, b) => a.sortY - b.sortY);
+    for (const d of drawables) {
+      d.draw();
     }
     
     // Draw UI
@@ -415,13 +472,13 @@ export class Simulation extends Game {
         this.squibbleManager.clear();
         this.foodManager = new FoodManager(
           this.settings.mapWidth,
-          this.settings.mapHeight,
-          this.settings.foodCount
+          this.settings.mapHeight
         );
         this.foodManager.spawnFood(
           this.worldData?.biomeGrid,
           this.worldData?.tileSize || 32,
-          this.worldData?.cols
+          this.worldData?.cols,
+          this.worldData?.rows
         );
         this.selectedSquibble = null;
         this.statsRecorder.clear();
@@ -554,8 +611,8 @@ export class Simulation extends Game {
     // Collect all icons to display (order: love, hunger, thirst, fetus)
     const icons: string[] = [];
     
-    // Love icon (seeking mate or breeding)
-    if (squibble.seekingMate || squibble.isBreeding) {
+    // Love icon (only when seeking mate, not when breeding - breeding has big heart)
+    if (squibble.seekingMate && !squibble.isBreeding) {
       icons.push('love');
     }
     

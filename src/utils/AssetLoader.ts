@@ -20,26 +20,35 @@ export class AssetLoader {
     
     try {
       // Load food sprites by species and stage
-      const foodSpecies: Array<{ name: string; folder: string; stages: string[] }> = [
+      // File numbering: 1 = empty (no food), N = full (all slots available)
+      // Forest Tree: 1-5 (5 = full with 4 slots, 1 = empty)
+      // Cactus: 1-4 (4 = full with 3 slots, 1 = empty)
+      // Plains Shrub: 1-4 (4 = full with 3 slots, 1 = empty)
+      // Tundra Tree: 1-3 (3 = full with 2 slots, 1 = empty)
+      const foodSpecies: Array<{ name: string; folder: string; subfolder: string; stages: string[] }> = [
         {
           name: 'cactus',
           folder: 'Desert',
-          stages: ['Desertcactus4.png', 'Desertcactus3.png', 'desertcactus2.png', 'desertcactus1.png'],
+          subfolder: 'DesertCactus',
+          stages: ['desertcactus1.PNG', 'desertcactus2.PNG', 'desertcactus3.PNG', 'desertcactus4.PNG'], // 1=empty, 2=1slot, 3=2slots, 4=full(3slots)
         },
         {
           name: 'foresttree',
           folder: 'Forest',
-          stages: ['ForestTree4.png', 'ForestTree3.png', 'Foresttree2.png', 'ForestTree1.png'],
+          subfolder: 'ForestTree',
+          stages: ['foresttree1.PNG', 'foresttree2.PNG', 'foresttree3.PNG', 'foresttree4.PNG', 'foresttree5.PNG'], // 1=empty, 2=1slot, 3=2slots, 4=3slots, 5=full(4slots)
         },
         {
           name: 'plainsshrub',
           folder: 'Plains',
-          stages: ['PlainsShrub4.png', 'PlainsShrub3.png', 'PlainsShrub2.png', 'PlainsShrub1.png'],
+          subfolder: 'PlainsShrub',
+          stages: ['plainsshrub1.PNG', 'plainsshrub2.PNG', 'plainsshrub3.PNG', 'plainsshrubs4.PNG'], // 1=empty, 2=1slot, 3=2slots, 4=full(3slots)
         },
         {
-          name: 'tundrabush',
+          name: 'tundratree',
           folder: 'Tundra',
-          stages: ['TundraBush4.png', 'TundraBush3.png', 'TundraBush2.png', 'TundraBush1.png'],
+          subfolder: 'TundraTree',
+          stages: ['tundratree1.PNG', 'tundratree2.PNG', 'tundratree3.PNG'], // 1=empty, 2=1slot, 3=full(2slots)
         },
       ];
       
@@ -47,7 +56,7 @@ export class AssetLoader {
         const textures: Texture[] = [];
         for (const stageFile of species.stages) {
           try {
-            const path = `Assets/Tilesets for Terrain/${species.folder}/${stageFile}`;
+            const path = `Assets/Tilesets for Terrain/${species.folder}/${species.subfolder}/${stageFile}`;
             const texture = await Assets.load(path);
             textures.push(texture);
           } catch (e) {
@@ -115,17 +124,41 @@ export class AssetLoader {
   }
   
   /**
-   * Get food texture for a species and stage (1-4, where 4 is full)
+   * Get food texture for a species based on remaining slots
+   * PNG files are numbered 1-N where:
+   *   - File 1 = empty (0 slots)
+   *   - File 2 = 1 slot remaining
+   *   - File 3 = 2 slots remaining
+   *   - ...
+   *   - File N = full (maxSlots remaining)
+   * 
+   * Textures are stored in order: [file 1, file 2, ..., file N]
+   * So: textureIndex = remainingSlots (0 = file 1, 1 = file 2, etc.)
+   * Special case: Forest Tree has 5 files for 4 slots, so file 5 = 4 slots
    */
-  static getFoodTexture(species: string, stage: number): Texture | null {
+  static getFoodTexture(species: string, remainingSlots: number): Texture | null {
     const textures = this.foodTextures.get(species);
     if (!textures || textures.length === 0) {
       return null;
     }
     
-    // Stage is remainingSlots + 1 (3->4, 2->3, 1->2, 0->1)
-    const index = Math.max(0, Math.min(textures.length - 1, stage - 1));
-    return textures[index] || textures[0];
+    // File number = remainingSlots + 1
+    // For forest tree: 4 slots = file 5, so we need to handle that
+    let fileNumber: number;
+    if (species === 'foresttree') {
+      // Forest tree: 0 slots = file 1, 1 slot = file 2, 2 slots = file 3, 3 slots = file 4, 4 slots = file 5
+      fileNumber = Math.min(remainingSlots + 1, 5);
+    } else {
+      // Other species: file number = remainingSlots + 1, capped at max file number
+      const maxFileNumber = textures.length;
+      fileNumber = Math.min(remainingSlots + 1, maxFileNumber);
+    }
+    
+    // Textures stored as [file 1, file 2, ..., file N]
+    // So index = fileNumber - 1
+    const textureIndex = fileNumber - 1;
+    
+    return textures[textureIndex] || textures[0];
   }
   
   /**

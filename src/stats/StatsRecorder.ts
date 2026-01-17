@@ -49,6 +49,9 @@ export class StatsRecorder {
     this.registerStat('avg_attractiveness', 'Avg Attractiveness', '#FF4081', 'traits');
     this.registerStat('avg_virility', 'Avg Virility', '#7C4DFF', 'traits');
     this.registerStat('avg_max_age', 'Avg Max Age', '#795548', 'traits');
+    this.registerStat('avg_intelligence', 'Avg Intelligence', '#3F51B5', 'traits');
+    this.registerStat('avg_swim', 'Avg Swim', '#009688', 'traits');
+    this.registerStat('avg_metabolism', 'Avg Metabolism', '#FF5722', 'traits');
     
     // Behavior stats
     this.registerStat('seeking_food_count', 'Seeking Food', '#FFC107', 'behavior');

@@ -6,6 +6,7 @@ import { RGB, Point } from '../utils/types';
 import { Food } from '../food/Food';
 import { FoodManager } from '../food/FoodManager';
 import { WaterMap } from '../terrain/WaterMap';
+import { Biome } from '../terrain/Biome';
 import {
   Genome,
   ExpressedPhenotypes,
@@ -19,6 +20,10 @@ import {
 } from '../genetics/Genetics';
 
 export class Squibble {
+  // Static counter for unique IDs
+  private static nextId: number = 1;
+  
+  public id: number; // Unique identifier for this squibble
   public x: number;
   public y: number;
   public color: RGB;
@@ -42,6 +47,21 @@ export class Squibble {
   public minAttractiveness: number; // 0-1, minimum attractiveness this squibble will mate with
   public virility: number; // 0-1, affects probability of successful breeding
   public gender: 'male' | 'female'; // Gender for breeding
+  
+  // Intelligence (0-1): reduces chance of cactus prick damage when eating cactus
+  public intelligence: number;
+  
+  // Swim (0-1): efficiency in water; low = slow + higher drown chance
+  public swim: number;
+  
+  // Metabolism (0-1): 0 = slow (less hunger/thirst drain, more from lichen), 1 = fast
+  public metabolism: number;
+  
+  // Wet: after leaving water, slow for 30 seconds
+  public wetTimer: number = 0;
+  
+  // Effective vision (base vision * forest penalty); set each frame in update
+  public effectiveVision: number = 100;
   
   // Visual traits (from multi-allele genes, for future graphical update)
   public hornStyle: string;
@@ -95,6 +115,9 @@ export class Squibble {
   public maxAge: number; // Maximum age in frames before death (genetic)
   
   constructor(x: number, y: number, color?: RGB, parent1?: Squibble, parent2?: Squibble) {
+    // Assign unique ID
+    this.id = Squibble.nextId++;
+    
     this.x = x;
     this.y = y;
     
@@ -113,6 +136,7 @@ export class Squibble {
     // Apply expressed traits
     this.color = color || (phenotypes.color as RGB);
     this.vision = phenotypes.vision;
+    this.effectiveVision = phenotypes.vision; // updated each frame for forest penalty
     this.speed = phenotypes.speed;
     this.attractiveness = phenotypes.attractiveness;
     this.virility = phenotypes.virility;
@@ -121,6 +145,9 @@ export class Squibble {
     this.thirstCapacity = phenotypes.thirstCapacity;
     this.litterSize = phenotypes.litterSize;
     this.geneticGestationDuration = phenotypes.gestationDuration;
+    this.intelligence = phenotypes.intelligence;
+    this.swim = phenotypes.swim;
+    this.metabolism = phenotypes.metabolism;
     
     // Set initial hunger/thirst to capacity
     this.hunger = this.hungerCapacity;
@@ -168,7 +195,8 @@ export class Squibble {
     screenHeight: number,
     foodManager?: FoodManager,
     waterMap?: WaterMap,
-    squibbleManager?: any // SquibbleManager for finding mates
+    squibbleManager?: any, // SquibbleManager for finding mates
+    getBiomeAt?: (x: number, y: number) => number
   ): void {
     if (!this.alive) {
       return;
@@ -231,8 +259,16 @@ export class Squibble {
     
     // Decrease stats over time (speed affects consumption rate)
     const speedMultiplier = 1.0 + (this.speed - 1.0) * 0.5;
-    this.hunger -= this.baseHungerRate * speedMultiplier * pregnancyMultiplier * dt;
-    this.thirst -= this.baseThirstRate * speedMultiplier * pregnancyMultiplier * dt;
+    // Metabolism: 0 = slow (0.6x drain), 1 = fast (1.4x drain)
+    const metabolismDrain = 0.6 + 0.8 * this.metabolism;
+    this.hunger -= this.baseHungerRate * speedMultiplier * pregnancyMultiplier * metabolismDrain * dt;
+    // Biome at current position (used for desert thirst, forest vision/speed, tundra speed)
+    const biome = getBiomeAt?.(this.x, this.y) ?? -1;
+    const thirstBiomeMultiplier = (biome === Biome.DESERT) ? 1.8 : 1.0;
+    this.thirst -= this.baseThirstRate * speedMultiplier * pregnancyMultiplier * thirstBiomeMultiplier * metabolismDrain * dt;
+    
+    // Forest reduces vision and movement (dense foliage)
+    this.effectiveVision = this.vision * (biome === Biome.FOREST ? 0.7 : 1.0);
     
     // Die if stats reach 0
     if (this.hunger <= 0 || this.thirst <= 0 || this.health <= 0) {
@@ -252,11 +288,14 @@ export class Squibble {
     
     // Try to eat food if available and hungry
     if (foodManager && this.hunger < this.hungerThreshold) {
-      const nutrition = foodManager.eatFoodAtPosition(this.x, this.y, this.radius + 5);
-      if (nutrition) {
-        const [hungerGain, thirstGain] = nutrition;
-        this.hunger = Math.min(100, this.hunger + hungerGain);
-        this.thirst = Math.min(100, this.thirst + thirstGain);
+      const result = foodManager.eatFoodAtPosition(this.x, this.y, this.radius + 5, this.intelligence, this.metabolism);
+      if (result) {
+        this.hunger = Math.min(this.hungerCapacity, this.hunger + result.hungerGain);
+        this.thirst = Math.min(this.thirstCapacity, this.thirst + result.thirstGain);
+        // Cactus can prick: intelligence reduces harm chance. Cactus does not restore health.
+        if (result.healthDamage && result.healthDamage > 0) {
+          this.health = Math.max(0, this.health - result.healthDamage);
+        }
       }
     }
     
@@ -286,7 +325,7 @@ export class Squibble {
     
     // Priority: Food > Water > Mate > Wander
     if (seekingFood && foodManager) {
-      const nearestFood = foodManager.getNearestFood(this.x, this.y, this.vision);
+      const nearestFood = foodManager.getNearestFood(this.x, this.y, this.effectiveVision);
       if (nearestFood) {
         // Move towards the food immediately
         const dx = nearestFood.x - this.x;
@@ -295,7 +334,7 @@ export class Squibble {
         this.directionChangeTimer = 0;
       }
     } else if (seekingWater && waterMap) {
-      const nearestWater = waterMap.findNearestWater(this.x, this.y, this.vision);
+      const nearestWater = waterMap.findNearestWater(this.x, this.y, this.effectiveVision);
       if (nearestWater) {
         // Move towards the water
         const dx = nearestWater.x - this.x;
@@ -319,7 +358,7 @@ export class Squibble {
     this.directionChangeTimer += 1;
     if (this.directionChangeTimer >= this.directionChangeInterval) {
       if (seekingFood && foodManager) {
-        const nearestFood = foodManager.getNearestFood(this.x, this.y, this.vision);
+        const nearestFood = foodManager.getNearestFood(this.x, this.y, this.effectiveVision);
         if (nearestFood) {
           // Move towards the food
           const dx = nearestFood.x - this.x;
@@ -342,14 +381,61 @@ export class Squibble {
       this.directionChangeTimer = 0;
     }
     
+    // Water state (before move): in-water, drowning, wet timer, evasion
+    const inWater = waterMap?.isWaterAt(this.x, this.y) ?? false;
+    
+    // Drowning: chance per second = (1 - swim) * 0.02
+    if (inWater && waterMap && Math.random() < (1 - this.swim) * 0.02 * dt) {
+      this.alive = false;
+      return;
+    }
+    
+    // Wet timer decays
+    if (this.wetTimer > 0) {
+      this.wetTimer = Math.max(0, this.wetTimer - dt);
+    }
+    
     // Move (unless breeding)
     // Pregnancy slows movement (down to 50% at full term)
     const pregnancySpeedPenalty = this.isPregnant ? (1 - pregnancyProgress * 0.5) : 1.0;
-    const effectiveSpeed = this.speed * pregnancySpeedPenalty;
+    let effectiveSpeed = this.speed * pregnancySpeedPenalty;
+    
+    // In water: swim stat determines speed (0.3 + 0.7*swim)
+    if (inWater) {
+      effectiveSpeed *= 0.3 + 0.7 * this.swim;
+    }
+    // Wet (after leaving water): 30% slower for 30 seconds
+    if (this.wetTimer > 0) {
+      effectiveSpeed *= 0.7;
+    }
+    // Forest: dense foliage reduces movement (20% slower)
+    if (biome === Biome.FOREST) {
+      effectiveSpeed *= 0.8;
+    }
+    // Tundra: cold, difficult terrain reduces movement (15% slower)
+    if (biome === Biome.TUNDRA) {
+      effectiveSpeed *= 0.85;
+    }
     
     if (!this.isBreeding && !this.isDrinking) {
+      // Evade water when possible: if next step would enter water and we're not seeking water, try to deflect
+      if (!inWater && waterMap && !seekingWater) {
+        const nextX = this.x + Math.cos(this.direction) * effectiveSpeed;
+        const nextY = this.y + Math.sin(this.direction) * effectiveSpeed;
+        if (waterMap.isWaterAt(nextX, nextY)) {
+          const alt = this.tryAvoidWaterDirection(this.x, this.y, this.direction, effectiveSpeed, waterMap);
+          if (alt !== null) this.direction = alt;
+        }
+      }
+      
       this.x += Math.cos(this.direction) * effectiveSpeed;
       this.y += Math.sin(this.direction) * effectiveSpeed;
+      
+      // Just left water: apply wet for 30 seconds
+      const inWaterAfter = waterMap?.isWaterAt(this.x, this.y) ?? false;
+      if (inWater && !inWaterAfter) {
+        this.wetTimer = 30;
+      }
     }
     
     // Bounce off boundaries
@@ -364,12 +450,29 @@ export class Squibble {
     }
   }
   
+  /**
+   * Try to pick a direction that avoids stepping into water. Tries angles offset from dir.
+   * Returns adjusted direction in radians, or null if all alternatives lead to water (must cross).
+   */
+  private tryAvoidWaterDirection(x: number, y: number, dir: number, stepSize: number, waterMap: WaterMap): number | null {
+    // Try angles deflected from current; we only call when current dir would hit water
+    const offsets = [Math.PI / 4, -Math.PI / 4, Math.PI / 2, -Math.PI / 2, (3 * Math.PI) / 4, (-3 * Math.PI) / 4];
+    for (const off of offsets) {
+      const tryDir = dir + off;
+      const nx = x + Math.cos(tryDir) * stepSize;
+      const ny = y + Math.sin(tryDir) * stepSize;
+      if (!waterMap.isWaterAt(nx, ny)) return tryDir;
+    }
+    return null;
+  }
+  
   getStats() {
     // Convert frame-based age to seconds (assuming ~60fps)
     const ageInSeconds = this.age / 60;
     const maxAgeInSeconds = this.maxAge / 60;
     
     return {
+      id: this.id,
       hunger: this.hunger,
       thirst: this.thirst,
       health: this.health,
@@ -392,6 +495,10 @@ export class Squibble {
       size: this.size,
       hunger_capacity: this.hungerCapacity,
       thirst_capacity: this.thirstCapacity,
+      intelligence: this.intelligence,
+      swim: this.swim,
+      metabolism: this.metabolism,
+      wet_timer: this.wetTimer,
       litter_size: this.litterSize,
       gestation_duration: this.geneticGestationDuration,
       multi_baby_pregnancies: this.multiBabyPregnancyCount,

@@ -11,7 +11,6 @@ export interface GameSettings {
   screenWidth: number;
   screenHeight: number;
   creatureCount: number;
-  foodCount: number;
   terrain?: {
     biome_scale: number;
     biome_weights: {
@@ -23,6 +22,8 @@ export interface GameSettings {
     pond_chance: number;
     river_chance: number;
     river_width: number;
+    /** Tile size in world units. Default 64. */
+    tile_size?: number;
   };
 }
 
@@ -72,7 +73,6 @@ export class Game {
       screen: `${this.settings.screenWidth}x${this.settings.screenHeight}`,
       map: `${this.settings.mapWidth}x${this.settings.mapHeight}`,
       creatures: this.settings.creatureCount,
-      food: this.settings.foodCount,
     });
   }
   
@@ -96,7 +96,7 @@ export class Game {
     // Override in subclasses or attach update handlers
   }
   
-  private setupInputHandling(): void {
+  protected setupInputHandling(): void {
     // Handle ESC to quit
     window.addEventListener('keydown', (e) => {
       if (e.code === 'Escape') {

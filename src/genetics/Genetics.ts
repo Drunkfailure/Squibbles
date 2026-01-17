@@ -233,6 +233,27 @@ export const POLYGENIC_TRAITS: Record<string, PolygenicTrait> = {
     baseValue: 25.0, // 25 seconds base
     outputRange: [15.0, 35.0], // 15-35 seconds
   },
+  intelligence: {
+    name: 'Intelligence',
+    lociCount: 5,
+    lociRange: [-0.08, 0.08],
+    baseValue: 0.5,
+    outputRange: [0, 1], // 0 = dim, 1 = clever; affects cactus prick chance
+  },
+  swim: {
+    name: 'Swim',
+    lociCount: 4,
+    lociRange: [-0.1, 0.1],
+    baseValue: 0.5,
+    outputRange: [0, 1], // 0 = poor, 1 = strong; affects speed in water and drowning chance
+  },
+  metabolism: {
+    name: 'Metabolism',
+    lociCount: 5,
+    lociRange: [-0.08, 0.08],
+    baseValue: 0.5,
+    outputRange: [0, 1], // 0 = slow (less drain, more from lichen), 1 = fast (more drain, less from lichen)
+  },
 };
 
 /**
@@ -336,6 +357,9 @@ export interface Genome {
     thirstCapacity: PolygenicGenotype;
     litterSize: PolygenicGenotype;
     gestationDuration: PolygenicGenotype;
+    intelligence: PolygenicGenotype;
+    swim: PolygenicGenotype;
+    metabolism: PolygenicGenotype;
   };
   
   // Multi-allele traits (discrete visual characteristics)
@@ -383,6 +407,9 @@ export function generateRandomGenome(): Genome {
       thirstCapacity: randomPolygenicGenotype(POLYGENIC_TRAITS.thirstCapacity),
       litterSize: randomPolygenicGenotype(POLYGENIC_TRAITS.litterSize),
       gestationDuration: randomPolygenicGenotype(POLYGENIC_TRAITS.gestationDuration),
+      intelligence: randomPolygenicGenotype(POLYGENIC_TRAITS.intelligence),
+      swim: randomPolygenicGenotype(POLYGENIC_TRAITS.swim),
+      metabolism: randomPolygenicGenotype(POLYGENIC_TRAITS.metabolism),
     },
     multiAllele: {
       hornStyle: randomMultiAlleleGenotype(MULTI_ALLELE_TRAITS.hornStyle),
@@ -420,6 +447,9 @@ export function inheritGenome(
       thirstCapacity: inheritPolygenic(parent1.polygenic.thirstCapacity, parent2.polygenic.thirstCapacity, POLYGENIC_TRAITS.thirstCapacity, mutationConfig),
       litterSize: inheritPolygenic(parent1.polygenic.litterSize, parent2.polygenic.litterSize, POLYGENIC_TRAITS.litterSize, mutationConfig),
       gestationDuration: inheritPolygenic(parent1.polygenic.gestationDuration, parent2.polygenic.gestationDuration, POLYGENIC_TRAITS.gestationDuration, mutationConfig),
+      intelligence: inheritPolygenic(parent1.polygenic.intelligence, parent2.polygenic.intelligence, POLYGENIC_TRAITS.intelligence, mutationConfig),
+      swim: inheritPolygenic(parent1.polygenic.swim, parent2.polygenic.swim, POLYGENIC_TRAITS.swim, mutationConfig),
+      metabolism: inheritPolygenic(parent1.polygenic.metabolism, parent2.polygenic.metabolism, POLYGENIC_TRAITS.metabolism, mutationConfig),
     },
     multiAllele: {
       hornStyle: inheritMultiAllele(parent1.multiAllele.hornStyle, parent2.multiAllele.hornStyle, MULTI_ALLELE_TRAITS.hornStyle, mutationConfig),
@@ -452,6 +482,9 @@ export interface ExpressedPhenotypes {
   thirstCapacity: number;
   litterSize: number;
   gestationDuration: number;
+  intelligence: number;
+  swim: number;
+  metabolism: number;
   
   // Visual traits (strings)
   hornStyle: string;
@@ -480,6 +513,9 @@ export function expressGenome(genome: Genome): ExpressedPhenotypes {
     thirstCapacity: getPolygenicPhenotype(POLYGENIC_TRAITS.thirstCapacity, genome.polygenic.thirstCapacity),
     litterSize: getPolygenicPhenotype(POLYGENIC_TRAITS.litterSize, genome.polygenic.litterSize),
     gestationDuration: getPolygenicPhenotype(POLYGENIC_TRAITS.gestationDuration, genome.polygenic.gestationDuration),
+    intelligence: getPolygenicPhenotype(POLYGENIC_TRAITS.intelligence, genome.polygenic.intelligence),
+    swim: getPolygenicPhenotype(POLYGENIC_TRAITS.swim, genome.polygenic.swim),
+    metabolism: getPolygenicPhenotype(POLYGENIC_TRAITS.metabolism, genome.polygenic.metabolism),
     
     hornStyle: getMultiAllelePhenotype(MULTI_ALLELE_TRAITS.hornStyle, genome.multiAllele.hornStyle),
     eyeType: getMultiAllelePhenotype(MULTI_ALLELE_TRAITS.eyeType, genome.multiAllele.eyeType),

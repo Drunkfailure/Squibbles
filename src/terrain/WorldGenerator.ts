@@ -17,6 +17,8 @@ export interface TerrainSettings {
   pond_chance: number;
   river_chance: number;
   river_width: number;
+  /** Tile size in world units. Larger = fewer, bigger tiles. Trees/food render at their own size. Default 64. */
+  tile_size?: number;
 }
 
 export interface WorldData {
@@ -892,9 +894,10 @@ export async function generateWorld(
     pond_chance: 20.0,
     river_chance: 60.0,
     river_width: 0,
+    tile_size: 64,
   };
   
-  const tileSize = 32;
+  const tileSize = Math.max(16, s.tile_size ?? 64);
   const rows = Math.max(1, Math.floor(height / tileSize));
   const cols = Math.max(1, Math.floor(width / tileSize));
   

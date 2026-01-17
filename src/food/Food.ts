@@ -2,19 +2,20 @@
  * Food - Individual food item with multi-stage consumption
  */
 
-export type FoodSpecies = 'plainsshrub' | 'foresttree' | 'cactus' | 'tundrabush';
+export type FoodSpecies = 'plainsshrub' | 'foresttree' | 'cactus' | 'tundratree';
 
 export interface FoodConfig {
+  maxSlots: number;
   regenDelay: number;
   hungerGain: number;
   thirstGain: number;
 }
 
 const SPECIES_CONFIG: Record<FoodSpecies, FoodConfig> = {
-  plainsshrub: { regenDelay: 5.0, hungerGain: 10.0, thirstGain: 0.0 },
-  foresttree: { regenDelay: 10.0, hungerGain: 20.0, thirstGain: 0.0 },
-  cactus: { regenDelay: 20.0, hungerGain: 8.0, thirstGain: 8.0 },
-  tundrabush: { regenDelay: 10.0, hungerGain: 15.0, thirstGain: 0.0 },
+  plainsshrub: { maxSlots: 3, regenDelay: 5.0, hungerGain: 10.0, thirstGain: 0.0 }, // 3 slots, moderate hunger
+  foresttree: { maxSlots: 4, regenDelay: 10.0, hungerGain: 15.0, thirstGain: 0.0 }, // 4 slots, moderate hunger
+  cactus: { maxSlots: 3, regenDelay: 25.0, hungerGain: 8.0, thirstGain: 8.0 }, // 3 slots, slow regrowth, hunger+thirst only; does NOT restore health; can prick (intelligence reduces harm chance)
+  tundratree: { maxSlots: 2, regenDelay: 10.0, hungerGain: 12.0, thirstGain: 0.0 }, // 2 slots, lichen; hunger scaled by metabolism in FoodManager (slow=more, fast=less)
 };
 
 export class Food {
@@ -23,30 +24,37 @@ export class Food {
   public species: FoodSpecies;
   public radius: number = 12;
   
+  /** Visual scale (0.75–1.25) so vegetation isn’t uniform; used for sprite size. */
+  public scale: number = 1.0;
+  /** Flip horizontally for variation. */
+  public flipH: boolean = false;
+  
   // Slot-based consumption
-  private maxSlots: number = 3;
+  public maxSlots: number;
   public remainingSlots: number;
   
   public eaten: boolean = false;
   public eatenTime: number = 0;
   public lastRegenTime: number = 0;
   
-  private regenDelay: number = 12.0;
-  public hungerGain: number = 15.0;
-  public thirstGain: number = 0.0;
+  private regenDelay: number;
+  public hungerGain: number;
+  public thirstGain: number;
   
-  constructor(x: number, y: number, species?: FoodSpecies) {
+  constructor(x: number, y: number, species?: FoodSpecies, scale?: number, flipH?: boolean) {
     this.x = x;
     this.y = y;
+    this.scale = scale ?? 1.0;
+    this.flipH = flipH ?? Math.random() < 0.5;
     
     // Choose species
-    const availableSpecies: FoodSpecies[] = ['plainsshrub', 'foresttree', 'cactus', 'tundrabush'];
+    const availableSpecies: FoodSpecies[] = ['plainsshrub', 'foresttree', 'cactus', 'tundratree'];
     this.species = species || availableSpecies[Math.floor(Math.random() * availableSpecies.length)];
-    
-    this.remainingSlots = this.maxSlots;
     
     // Apply species-specific config
     const config = SPECIES_CONFIG[this.species];
+    this.maxSlots = config.maxSlots;
+    this.remainingSlots = this.maxSlots; // Start with full slots
     this.regenDelay = config.regenDelay;
     this.hungerGain = config.hungerGain;
     this.thirstGain = config.thirstGain;
