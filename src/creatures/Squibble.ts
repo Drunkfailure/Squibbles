@@ -37,7 +37,8 @@ export class Squibble {
   // Stats (derived from genome)
   public hunger: number = 100.0;
   public thirst: number = 100.0;
-  public health: number = 100.0;
+  public health: number = 100.0; // Current HP
+  public maxHealth: number = 100.0; // Max HP (genetic)
   public vision: number;
   public hungerCapacity: number = 100.0; // Max hunger (genetic)
   public thirstCapacity: number = 100.0; // Max thirst (genetic)
@@ -83,7 +84,7 @@ export class Squibble {
   // Behavior thresholds
   private hungerThreshold: number = 70.0;
   private thirstThreshold: number = 70.0; // Threshold for seeking water
-  private matingHealthThreshold: number = 60.0; // Minimum health to seek mates
+  private matingHealthThreshold: number = 0.6; // Minimum health percentage (60%) to seek mates
   private matingHungerThreshold: number = 65.0; // Must be well-fed to seek mates
   private matingThirstThreshold: number = 65.0; // Must be well-hydrated to seek mates
   
@@ -131,12 +132,21 @@ export class Squibble {
   public age: number = 0; // Age in frames
   public maxAge: number; // Maximum age in frames before death (genetic)
   
+  // Family tree tracking (using IDs instead of object references)
+  public parent1Id: number | null = null; // Mother ID (or first parent ID)
+  public parent2Id: number | null = null; // Father ID (or second parent ID)
+  public mateIds: number[] = []; // All breeding partners this squibble has mated with
+  
   constructor(x: number, y: number, color?: RGB, parent1?: Squibble, parent2?: Squibble) {
     // Assign unique ID
     this.id = Squibble.nextId++;
     
     this.x = x;
     this.y = y;
+    
+    // Store parent IDs for family tree (more reliable than object references)
+    this.parent1Id = parent1?.id || null;
+    this.parent2Id = parent2?.id || null;
     
     // Genetics: inherit from parents or generate randomly
     if (parent1 && parent2) {
@@ -168,10 +178,13 @@ export class Squibble {
     this.damageResistance = phenotypes.damageResistance;
     this.aggressiveness = phenotypes.aggressiveness;
     this.damage = phenotypes.damage;
+    this.maxHealth = phenotypes.maxHealth;
     
     // Set initial hunger/thirst to capacity
     this.hunger = this.hungerCapacity;
     this.thirst = this.thirstCapacity;
+    // Set initial health to max HP
+    this.health = this.maxHealth;
     
     // Visual traits (stored for future graphical update)
     this.hornStyle = phenotypes.hornStyle;
@@ -185,7 +198,9 @@ export class Squibble {
     this.gender = Math.random() < 0.5 ? 'male' : 'female';
     
     // Min attractiveness is random preference (not inherited)
-    this.minAttractiveness = Math.random();
+    // Lower values = less picky, more likely to breed
+    // Using Math.random() * 0.6 to make squibbles less picky on average (0-0.6 range instead of 0-1)
+    this.minAttractiveness = Math.random() * 0.6;
     
     // Size with gender bias applied
     const baseSize = phenotypes.size;
@@ -437,10 +452,10 @@ export class Squibble {
           this.directionChangeTimer = 0;
         }
       }
-    } else if (this.seekingMate && squibbleManager) {
-      // Seek a mate
-      const potentialMate = squibbleManager.findPotentialMate(this);
-      if (potentialMate) {
+                } else if (this.seekingMate && squibbleManager) {
+                  // Seek a mate
+                  const potentialMate = squibbleManager.findPotentialMate(this, waterMap);
+                  if (potentialMate) {
         // Move towards the potential mate
         const dx = potentialMate.x - this.x;
         const dy = potentialMate.y - this.y;
@@ -554,7 +569,7 @@ export class Squibble {
           // Check if we have an active target (food, water, or mate)
           const hasActiveTarget = (seekingFood && foodManager && foodManager.getNearestFood(this.x, this.y, this.effectiveVision)) ||
                                   (seekingWater && waterMap && waterMap.findNearestWater(this.x, this.y, this.effectiveVision)) ||
-                                  (this.seekingMate && squibbleManager && squibbleManager.findPotentialMate(this));
+                                  (this.seekingMate && squibbleManager && squibbleManager.findPotentialMate(this, waterMap));
           
           if (hasActiveTarget) {
             // Willingness to cross water is based on swim stat
@@ -689,6 +704,8 @@ export class Squibble {
       hunger: this.hunger,
       thirst: this.thirst,
       health: this.health,
+      max_health: this.maxHealth,
+      health_percentage: (this.health / this.maxHealth) * 100,
       vision: this.vision,
       speed: this.speed,
       speed_multiplier: 1.0 + (this.speed - 1.0) * 0.5,
@@ -739,9 +756,11 @@ export class Squibble {
   
   /**
    * Check if this squibble can mate with another
+   * @param other The other squibble to check
    * @param allowInterruption If true, allows checking even if one is already breeding (for interruption logic)
+   * @param waterMap Optional water map to check if squibbles are in water (breeding cannot occur in water)
    */
-  canMateWith(other: Squibble, allowInterruption: boolean = false): boolean {
+  canMateWith(other: Squibble, allowInterruption: boolean = false, waterMap?: WaterMap): boolean {
     // Both must be alive
     if (!this.alive || !other.alive) return false;
     
@@ -754,6 +773,13 @@ export class Squibble {
     // Pregnant squibbles cannot breed
     if (this.isPregnant || other.isPregnant) return false;
     
+    // Cannot breed in water - check if either squibble is in water
+    if (waterMap) {
+      if (waterMap.isWaterAt(this.x, this.y) || waterMap.isWaterAt(other.x, other.y)) {
+        return false;
+      }
+    }
+    
     // If not allowing interruption, check cooldowns and breeding status
     if (!allowInterruption) {
       if (this.breedingCooldown > 0 || other.breedingCooldown > 0) return false;
@@ -761,10 +787,12 @@ export class Squibble {
     }
     
     // Both must meet health/hunger/thirst thresholds
-    if (this.health < this.matingHealthThreshold || 
+    const thisHealthPercent = this.health / this.maxHealth;
+    if (thisHealthPercent < this.matingHealthThreshold || 
         this.hunger < this.matingHungerThreshold || 
         this.thirst < this.matingThirstThreshold) return false;
-    if (other.health < other.matingHealthThreshold || 
+    const otherHealthPercent = other.health / other.maxHealth;
+    if (otherHealthPercent < other.matingHealthThreshold || 
         other.hunger < other.matingHungerThreshold ||
         other.thirst < other.matingThirstThreshold) return false;
     
@@ -800,6 +828,20 @@ export class Squibble {
    * Complete breeding successfully
    */
   completeBreeding(): void {
+    // Track the mate before clearing the breeding partner
+    // This ensures all successful breedings are recorded, even if no child is produced
+    if (this.breedingPartner) {
+      const partnerId = this.breedingPartner.id;
+      // Add to this squibble's mate list
+      if (!this.mateIds.includes(partnerId)) {
+        this.mateIds.push(partnerId);
+      }
+      // Also add this squibble to the partner's mate list (reciprocal tracking)
+      if (!this.breedingPartner.mateIds.includes(this.id)) {
+        this.breedingPartner.mateIds.push(this.id);
+      }
+    }
+    
     this.isBreeding = false;
     this.breedingPartner = null;
     this.breedingTimeRemaining = 0;

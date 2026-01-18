@@ -17,6 +17,7 @@ import { SimulationUI } from '../ui/SimulationUI';
 import { StatsRecorder } from '../stats/StatsRecorder';
 import { StatsGraphRenderer } from '../stats/StatsGraphRenderer';
 import { EscMenu } from '../ui/EscMenu';
+import { FamilyTree } from '../ui/FamilyTree';
 
 export class Simulation extends Game {
   private squibbleManager: SquibbleManager;
@@ -53,6 +54,9 @@ export class Simulation extends Game {
   private escMenu: EscMenu;
   private onReturnToTitle: (() => void) | null = null;
   
+  // Family tree
+  private familyTree: FamilyTree;
+  
   /** Base size for tree/food sprites in world units. Smaller than tile so they feel placed in the world, not filling it. */
   private static readonly TREE_FOOD_SPRITE_WORLD_SIZE = 44;
   
@@ -73,6 +77,9 @@ export class Simulation extends Game {
     
     // ESC menu
     this.escMenu = new EscMenu();
+    
+    // Family tree
+    this.familyTree = new FamilyTree();
     
     // Create containers
     this.terrainContainer = new Container();
@@ -96,6 +103,22 @@ export class Simulation extends Game {
     app.stage.addChild(this.ui.getContainer());
     
     this.renderer = new Renderer(this.entityContainer);
+    
+    // Set up family tree callback
+    this.ui.setFamilyTreeCallback(() => {
+      if (this.selectedSquibble) {
+        const allSquibbles = this.squibbleManager.getAll();
+        this.familyTree.show(
+          this.selectedSquibble,
+          allSquibbles,
+          (squibble: Squibble) => {
+            // When a squibble is clicked in the family tree, select it
+            this.selectedSquibble = squibble;
+            this.ui.drawSquibbleDetails(squibble);
+          }
+        );
+      }
+    });
     
     // Load assets first
     if (onProgress) {
@@ -423,7 +446,7 @@ export class Simulation extends Game {
                 this.entityContainer.addChild(loveSprite);
               }
             }
-            this.drawHealthBar(sx, sy, radius, squibble.health, this.zoomLevel);
+            this.drawHealthBar(sx, sy, radius, squibble.health, squibble.maxHealth, this.zoomLevel);
             this.drawStatusIcons(sx, sy, radius, squibble, this.zoomLevel);
             const endX = sx + Math.cos(squibble.direction) * (radius + 5) * this.zoomLevel;
             const endY = sy + Math.sin(squibble.direction) * (radius + 5) * this.zoomLevel;
@@ -601,7 +624,7 @@ export class Simulation extends Game {
     return this.zoomLevel;
   }
   
-  private drawHealthBar(x: number, y: number, radius: number, health: number, zoom: number): void {
+  private drawHealthBar(x: number, y: number, radius: number, health: number, maxHealth: number, zoom: number): void {
     const barWidth = 20 * zoom;
     const barHeight = 3 * zoom;
     const barX = x - barWidth / 2;
@@ -611,18 +634,20 @@ export class Simulation extends Game {
     this.renderer.drawRect(barX, barY, barWidth, barHeight, [100, 100, 100], 1.0);
     
     // Health fill
-    const healthWidth = (health / 100.0) * barWidth;
+    const healthPercentage = health / maxHealth;
+    const healthWidth = healthPercentage * barWidth;
     if (healthWidth > 0) {
       let color: [number, number, number];
-      if (health > 50) {
+      const healthPercent = healthPercentage * 100; // Convert to 0-100 scale for color calculation
+      if (healthPercent > 50) {
         // Green to yellow
         const green = 255;
-        const red = Math.floor(255 * (1 - (health - 50) / 50));
+        const red = Math.floor(255 * (1 - (healthPercent - 50) / 50));
         color = [red, green, 0];
       } else {
         // Yellow to red
         const red = 255;
-        const green = Math.floor(255 * (health / 50));
+        const green = Math.floor(255 * (healthPercent / 50));
         color = [red, green, 0];
       }
       this.renderer.drawRect(barX, barY, healthWidth, barHeight, color, 1.0);

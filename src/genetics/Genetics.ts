@@ -275,6 +275,13 @@ export const POLYGENIC_TRAITS: Record<string, PolygenicTrait> = {
     baseValue: 5.0,
     outputRange: [1, 15], // Combat damage/ability (for future combat system)
   },
+  maxHealth: {
+    name: 'Max Health',
+    lociCount: 6,
+    lociRange: [-10, 10],
+    baseValue: 100.0,
+    outputRange: [50, 200], // HP range: 50-200 HP
+  },
 };
 
 /**
@@ -384,6 +391,7 @@ export interface Genome {
     damageResistance: PolygenicGenotype;
     aggressiveness: PolygenicGenotype;
     damage: PolygenicGenotype;
+    maxHealth: PolygenicGenotype;
   };
   
   // Multi-allele traits (discrete visual characteristics)
@@ -437,6 +445,7 @@ export function generateRandomGenome(): Genome {
       damageResistance: randomPolygenicGenotype(POLYGENIC_TRAITS.damageResistance),
       aggressiveness: randomPolygenicGenotype(POLYGENIC_TRAITS.aggressiveness),
       damage: randomPolygenicGenotype(POLYGENIC_TRAITS.damage),
+      maxHealth: randomPolygenicGenotype(POLYGENIC_TRAITS.maxHealth),
     },
     multiAllele: {
       hornStyle: randomMultiAlleleGenotype(MULTI_ALLELE_TRAITS.hornStyle),
@@ -480,6 +489,7 @@ export function inheritGenome(
       damageResistance: inheritPolygenic(parent1.polygenic.damageResistance, parent2.polygenic.damageResistance, POLYGENIC_TRAITS.damageResistance, mutationConfig),
       aggressiveness: inheritPolygenic(parent1.polygenic.aggressiveness, parent2.polygenic.aggressiveness, POLYGENIC_TRAITS.aggressiveness, mutationConfig),
       damage: inheritPolygenic(parent1.polygenic.damage, parent2.polygenic.damage, POLYGENIC_TRAITS.damage, mutationConfig),
+      maxHealth: inheritPolygenic(parent1.polygenic.maxHealth, parent2.polygenic.maxHealth, POLYGENIC_TRAITS.maxHealth, mutationConfig),
     },
     multiAllele: {
       hornStyle: inheritMultiAllele(parent1.multiAllele.hornStyle, parent2.multiAllele.hornStyle, MULTI_ALLELE_TRAITS.hornStyle, mutationConfig),
@@ -518,6 +528,7 @@ export interface ExpressedPhenotypes {
   damageResistance: number;
   aggressiveness: number;
   damage: number;
+  maxHealth: number;
   
   // Visual traits (strings)
   hornStyle: string;
@@ -552,6 +563,7 @@ export function expressGenome(genome: Genome): ExpressedPhenotypes {
     damageResistance: getPolygenicPhenotype(POLYGENIC_TRAITS.damageResistance, genome.polygenic.damageResistance),
     aggressiveness: getPolygenicPhenotype(POLYGENIC_TRAITS.aggressiveness, genome.polygenic.aggressiveness),
     damage: getPolygenicPhenotype(POLYGENIC_TRAITS.damage, genome.polygenic.damage),
+    maxHealth: getPolygenicPhenotype(POLYGENIC_TRAITS.maxHealth, genome.polygenic.maxHealth),
     
     hornStyle: getMultiAllelePhenotype(MULTI_ALLELE_TRAITS.hornStyle, genome.multiAllele.hornStyle),
     eyeType: getMultiAllelePhenotype(MULTI_ALLELE_TRAITS.eyeType, genome.multiAllele.eyeType),

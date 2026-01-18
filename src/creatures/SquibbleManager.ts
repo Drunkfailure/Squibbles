@@ -18,13 +18,13 @@ export class SquibbleManager {
   /**
    * Find a potential mate for a squibble
    */
-  findPotentialMate(seeker: Squibble): Squibble | null {
+  findPotentialMate(seeker: Squibble, waterMap?: WaterMap): Squibble | null {
     let nearestMate: Squibble | null = null;
     let nearestDistance = Infinity;
     
     for (const other of this.squibbles) {
       if (other === seeker || !other.alive) continue;
-      if (!seeker.canMateWith(other)) continue;
+      if (!seeker.canMateWith(other, false, waterMap)) continue;
       
       const dx = other.x - seeker.x;
       const dy = other.y - seeker.y;
@@ -65,7 +65,7 @@ export class SquibbleManager {
   /**
    * Check for breeding opportunities and start pregnancies
    */
-  private processBreeding(): void {
+  private processBreeding(waterMap?: WaterMap): void {
     // First, check for completed breeding (10 seconds elapsed) - starts pregnancy
     for (const squibble of this.squibbles) {
       if (squibble.isBreeding && squibble.isBreedingComplete() && squibble.breedingPartner) {
@@ -80,7 +80,7 @@ export class SquibbleManager {
           female.startPregnancy(male);
         }
         
-        // Complete breeding for both
+        // Complete breeding for both (this will track mates in completeBreeding())
         squibble.completeBreeding();
         partner.completeBreeding();
       }
@@ -103,7 +103,7 @@ export class SquibbleManager {
           // Must be male, alive, seeking mate, and eligible
           if (!other.alive || other.gender !== 'male' || !other.seekingMate) continue;
           // Allow interruption check even if one is breeding
-          if (!squibble1.canMateWith(other, true)) continue;
+          if (!squibble1.canMateWith(other, true, waterMap)) continue;
           
           // Check distance
           const dx = other.x - squibble1.x;
@@ -154,7 +154,7 @@ export class SquibbleManager {
           if (!squibble2.alive || squibble2.isBreeding || !squibble2.seekingMate) continue;
           
           // Check if they can mate
-          if (!squibble1.canMateWith(squibble2)) continue;
+          if (!squibble1.canMateWith(squibble2, false, waterMap)) continue;
           
           // Check if they're close enough
           const dx = squibble2.x - squibble1.x;
@@ -186,7 +186,7 @@ export class SquibbleManager {
     }
     
     // Process breeding
-    this.processBreeding();
+    this.processBreeding(waterMap);
     
     // Process pregnancies (births)
     this.processPregnancies();

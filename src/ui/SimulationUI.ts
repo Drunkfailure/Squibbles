@@ -21,8 +21,11 @@ export class SimulationUI {
   private page1ButtonText: Text | null = null;
   private page2Button: Graphics | null = null;
   private page2ButtonText: Text | null = null;
+  private familyTreeButton: Graphics | null = null;
+  private familyTreeButtonText: Text | null = null;
   private currentPage: number = 1;
   private lastSelectedSquibbleId: number | null = null;
+  private onFamilyTreeClick: (() => void) | null = null;
   
   // Panel bounds for click detection
   private panelX: number = 0;
@@ -159,6 +162,16 @@ export class SimulationUI {
       this.page2ButtonText.destroy();
       this.page2ButtonText = null;
     }
+    if (this.familyTreeButton) {
+      this.container.removeChild(this.familyTreeButton);
+      this.familyTreeButton.destroy();
+      this.familyTreeButton = null;
+    }
+    if (this.familyTreeButtonText) {
+      this.container.removeChild(this.familyTreeButtonText);
+      this.familyTreeButtonText.destroy();
+      this.familyTreeButtonText = null;
+    }
     
     if (!squibble) {
       this.lastSelectedSquibbleId = null;
@@ -180,8 +193,10 @@ export class SimulationUI {
     const panelWidth = 280;
     const buttonHeight = 30;
     const buttonMargin = 15;
+    const buttonSpacing = 5;
     const textAreaHeight = 480; // Increased height for text content (accommodates all stats)
-    const panelHeight = textAreaHeight + buttonHeight + buttonMargin * 2 + 50; // Total panel height (~590px, extended by 50px)
+    // Total height: text area + page buttons + spacing + family tree button + margins
+    const panelHeight = textAreaHeight + (buttonHeight * 2) + (buttonSpacing * 2) + (buttonMargin * 2) + 50; // ~650px total
     const panelX = this.screenWidth - panelWidth - 10;
     const panelY = 10;
     // Position buttons at the bottom of the panel (with margin from bottom)
@@ -224,7 +239,7 @@ export class SimulationUI {
       `Age: ${stats.age.toFixed(1)}s / ${stats.max_age.toFixed(1)}s`,
       '',
       'Health:',
-      `  Health: ${stats.health.toFixed(1)}%`,
+      `  Health: ${stats.health.toFixed(1)} / ${stats.max_health.toFixed(1)} HP`,
       `  Hunger: ${stats.hunger.toFixed(1)}%`,
       `  Thirst: ${stats.thirst.toFixed(1)}%`,
       '',
@@ -287,7 +302,7 @@ export class SimulationUI {
     
     // Create page navigation buttons
     const buttonWidth = (panelWidth - 20) / 2;
-    const buttonSpacing = 5;
+    // buttonSpacing is already declared above (line 196)
     
     // Page 1 button
     const page1ButtonX = panelX + 10;
@@ -328,6 +343,34 @@ export class SimulationUI {
     this.page2ButtonText.x = page2ButtonX + buttonWidth / 2 - this.page2ButtonText.width / 2;
     this.page2ButtonText.y = buttonY + buttonHeight / 2 - this.page2ButtonText.height / 2;
     this.container.addChild(this.page2ButtonText);
+    
+    // Family Tree button (full width, below page buttons)
+    const familyTreeButtonY = buttonY + buttonHeight + buttonSpacing;
+    this.familyTreeButton = new Graphics();
+    this.familyTreeButton
+      .beginFill(0x3498db, 0.9)
+      .drawRect(panelX + 10, familyTreeButtonY, panelWidth - 20, buttonHeight)
+      .endFill();
+    this.familyTreeButton.interactive = true;
+    this.familyTreeButton.buttonMode = true;
+    this.familyTreeButton.on('pointerdown', () => {
+      if (this.onFamilyTreeClick) {
+        this.onFamilyTreeClick();
+      }
+    });
+    this.container.addChild(this.familyTreeButton);
+    
+    this.familyTreeButtonText = new Text('Family Tree', buttonStyle);
+    this.familyTreeButtonText.x = panelX + panelWidth / 2 - this.familyTreeButtonText.width / 2;
+    this.familyTreeButtonText.y = familyTreeButtonY + buttonHeight / 2 - this.familyTreeButtonText.height / 2;
+    this.container.addChild(this.familyTreeButtonText);
+  }
+  
+  /**
+   * Set callback for family tree button click
+   */
+  setFamilyTreeCallback(callback: () => void): void {
+    this.onFamilyTreeClick = callback;
   }
   
   toggleControls(): void {
