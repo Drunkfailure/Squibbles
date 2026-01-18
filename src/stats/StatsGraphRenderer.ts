@@ -22,6 +22,17 @@ export class StatsGraphRenderer {
   private updateInterval: number | null = null;
   private isVisible: boolean = false;
   
+  // Event listener references for cleanup
+  private resizeHandler: (() => void) | null = null;
+  private keydownHandler: ((e: KeyboardEvent) => void) | null = null;
+  private mousemoveHandler: ((e: MouseEvent) => void) | null = null;
+  
+  // Throttle resize to prevent excessive renders
+  private resizeTimeout: number | null = null;
+  
+  // Prevent overlapping renders
+  private isRendering: boolean = false;
+  
   constructor(recorder: StatsRecorder) {
     this.recorder = recorder;
     
@@ -35,16 +46,31 @@ export class StatsGraphRenderer {
    * Show the stats graph overlay
    */
   show(): void {
-    if (this.isVisible) return;
+    if (this.isVisible) return; // Prevent multiple shows
+    
+    // Clean up any existing overlay first (safety check)
+    if (this.container) {
+      this.hide();
+    }
+    
     this.isVisible = true;
     this.createOverlay();
     this.render();
     
     // Start live update interval (every 500ms)
     this.updateInterval = window.setInterval(() => {
-      this.render();
-      this.updateInfoBar();
+      if (this.isVisible) {
+        this.render();
+        this.updateInfoBar();
+      }
     }, 500);
+  }
+  
+  /**
+   * Check if the graph overlay is currently visible
+   */
+  isGraphVisible(): boolean {
+    return this.isVisible;
   }
   
   /**
@@ -59,8 +85,31 @@ export class StatsGraphRenderer {
       this.updateInterval = null;
     }
     
+    // Clear resize timeout
+    if (this.resizeTimeout !== null) {
+      clearTimeout(this.resizeTimeout);
+      this.resizeTimeout = null;
+    }
+    
+    // Remove event listeners
+    if (this.resizeHandler) {
+      window.removeEventListener('resize', this.resizeHandler);
+      this.resizeHandler = null;
+    }
+    if (this.keydownHandler) {
+      window.removeEventListener('keydown', this.keydownHandler);
+      this.keydownHandler = null;
+    }
+    if (this.mousemoveHandler && this.canvas) {
+      this.canvas.removeEventListener('mousemove', this.mousemoveHandler);
+      this.mousemoveHandler = null;
+    }
+    
+    // Remove DOM elements
     if (this.container) {
-      document.body.removeChild(this.container);
+      if (this.container.parentNode) {
+        document.body.removeChild(this.container);
+      }
       this.container = null;
       this.canvas = null;
       this.ctx = null;
@@ -173,13 +222,28 @@ export class StatsGraphRenderer {
     this.resizeCanvas();
     this.ctx = this.canvas.getContext('2d');
     
-    // Event listeners
-    window.addEventListener('resize', () => this.resizeCanvas());
-    window.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') this.hide();
-    });
+    // Event listeners (store references for cleanup)
+    this.resizeHandler = () => {
+      // Throttle resize to prevent excessive renders
+      if (this.resizeTimeout !== null) {
+        clearTimeout(this.resizeTimeout);
+      }
+      this.resizeTimeout = window.setTimeout(() => {
+        if (this.isVisible) {
+          this.resizeCanvas();
+        }
+      }, 100); // Throttle to max once per 100ms
+    };
     
-    this.canvas.addEventListener('mousemove', (e) => this.onMouseMove(e));
+    this.keydownHandler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') this.hide();
+    };
+    
+    this.mousemoveHandler = (e: MouseEvent) => this.onMouseMove(e);
+    
+    window.addEventListener('resize', this.resizeHandler);
+    window.addEventListener('keydown', this.keydownHandler);
+    this.canvas.addEventListener('mousemove', this.mousemoveHandler);
   }
   
   /**
@@ -284,13 +348,16 @@ export class StatsGraphRenderer {
    * Resize canvas to fit container
    */
   private resizeCanvas(): void {
-    if (!this.canvas) return;
+    if (!this.canvas || !this.isVisible) return;
     
     const rect = this.canvas.parentElement?.getBoundingClientRect();
     if (rect) {
       this.canvas.width = rect.width - 40;
       this.canvas.height = rect.height - 60;
-      this.render();
+      // Only render if we have a context
+      if (this.ctx) {
+        this.render();
+      }
     }
   }
   
@@ -298,9 +365,14 @@ export class StatsGraphRenderer {
    * Main render function
    */
   render(): void {
-    if (!this.ctx || !this.canvas) return;
+    if (!this.ctx || !this.canvas || !this.isVisible) return;
     
-    const ctx = this.ctx;
+    // Prevent overlapping renders
+    if (this.isRendering) return;
+    this.isRendering = true;
+    
+    try {
+      const ctx = this.ctx;
     const width = this.canvas.width;
     const height = this.canvas.height;
     
@@ -387,6 +459,9 @@ export class StatsGraphRenderer {
       ctx.textAlign = 'left';
       ctx.fillText(config.label, width - this.graphPadding.right + 45, legendY + 12);
       legendY += 25;
+    }
+    } finally {
+      this.isRendering = false;
     }
   }
   

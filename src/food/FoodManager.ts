@@ -195,6 +195,34 @@ export class FoodManager {
     return nearestFood;
   }
   
+  /**
+   * Find the nearest cactus (for thirst in desert)
+   */
+  getNearestCactus(x: number, y: number, visionRadius: number): Food | null {
+    let nearestCactus: Food | null = null;
+    let nearestDistance = Infinity;
+    
+    for (const cellKey of this.iterCellsInRadius(x, y, visionRadius)) {
+      const foods = this.grid.get(cellKey) || [];
+      for (const food of foods) {
+        if (!food.isAvailable() || food.species !== 'cactus') {
+          continue;
+        }
+        
+        const dx = food.x - x;
+        const dy = food.y - y;
+        const d2 = dx * dx + dy * dy;
+        
+        if (d2 <= visionRadius * visionRadius && d2 < nearestDistance) {
+          nearestDistance = d2;
+          nearestCactus = food;
+        }
+      }
+    }
+    
+    return nearestCactus;
+  }
+  
   /** Returns { hungerGain, thirstGain, healthDamage? } or null. Cactus: healthDamage, intelligence reduces prick. Tundratree (lichen): hungerGain scaled by metabolism (slow=more, fast=less). */
   eatFoodAtPosition(x: number, y: number, radius: number = 10, intelligence: number = 0.5, metabolism: number = 0.5): { hungerGain: number; thirstGain: number; healthDamage?: number } | null {
     const food = this.getFoodAtPosition(x, y, radius);

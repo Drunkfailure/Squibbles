@@ -57,6 +57,15 @@ export class Squibble {
   // Metabolism (0-1): 0 = slow (less hunger/thirst drain, more from lichen), 1 = fast
   public metabolism: number;
   
+  // Damage Resistance (0-0.5): 0 = no resistance, 0.5 = 50% damage resistance
+  public damageResistance: number;
+  
+  // Aggressiveness (0-1): 0 = flee from predators, 1 = stand ground (for future predator update)
+  public aggressiveness: number;
+  
+  // Damage (1-15): Combat damage/ability (for future combat system)
+  public damage: number;
+  
   // Wet: after leaving water, slow for 30 seconds
   public wetTimer: number = 0;
   
@@ -84,12 +93,20 @@ export class Squibble {
   private directionChangeTimer: number = 0;
   private directionChangeInterval: number;
   
+  // Water crossing target (set when entering water, cleared when reaching land)
+  private waterCrossingTarget: { x: number; y: number } | null = null;
+  
   // Speed-based consumption rates
   private baseHungerRate: number = 0.5;
   private baseThirstRate: number = 0.3;
   
   // Drinking state
   public isDrinking: boolean = false;
+  
+  // Eating state
+  public isEating: boolean = false;
+  public eatingTimeRemaining: number = 0;
+  private eatingDuration: number = 5.0; // 5 seconds to eat food
   
   // Breeding state
   public seekingMate: boolean = false;
@@ -148,6 +165,9 @@ export class Squibble {
     this.intelligence = phenotypes.intelligence;
     this.swim = phenotypes.swim;
     this.metabolism = phenotypes.metabolism;
+    this.damageResistance = phenotypes.damageResistance;
+    this.aggressiveness = phenotypes.aggressiveness;
+    this.damage = phenotypes.damage;
     
     // Set initial hunger/thirst to capacity
     this.hunger = this.hungerCapacity;
@@ -261,11 +281,19 @@ export class Squibble {
     const speedMultiplier = 1.0 + (this.speed - 1.0) * 0.5;
     // Metabolism: 0 = slow (0.6x drain), 1 = fast (1.4x drain)
     const metabolismDrain = 0.6 + 0.8 * this.metabolism;
-    this.hunger -= this.baseHungerRate * speedMultiplier * pregnancyMultiplier * metabolismDrain * dt;
+    
+    // Don't drain hunger while eating (they're actively consuming food)
+    if (!this.isEating) {
+      this.hunger -= this.baseHungerRate * speedMultiplier * pregnancyMultiplier * metabolismDrain * dt;
+    }
+    
     // Biome at current position (used for desert thirst, forest vision/speed, tundra speed)
     const biome = getBiomeAt?.(this.x, this.y) ?? -1;
     const thirstBiomeMultiplier = (biome === Biome.DESERT) ? 1.8 : 1.0;
-    this.thirst -= this.baseThirstRate * speedMultiplier * pregnancyMultiplier * thirstBiomeMultiplier * metabolismDrain * dt;
+    // Don't drain thirst while drinking (they're actively consuming water)
+    if (!this.isDrinking) {
+      this.thirst -= this.baseThirstRate * speedMultiplier * pregnancyMultiplier * thirstBiomeMultiplier * metabolismDrain * dt;
+    }
     
     // Forest reduces vision and movement (dense foliage)
     this.effectiveVision = this.vision * (biome === Biome.FOREST ? 0.7 : 1.0);
@@ -286,15 +314,49 @@ export class Squibble {
       }
     }
     
-    // Try to eat food if available and hungry
-    if (foodManager && this.hunger < this.hungerThreshold) {
-      const result = foodManager.eatFoodAtPosition(this.x, this.y, this.radius + 5, this.intelligence, this.metabolism);
-      if (result) {
-        this.hunger = Math.min(this.hungerCapacity, this.hunger + result.hungerGain);
-        this.thirst = Math.min(this.thirstCapacity, this.thirst + result.thirstGain);
-        // Cactus can prick: intelligence reduces harm chance. Cactus does not restore health.
-        if (result.healthDamage && result.healthDamage > 0) {
-          this.health = Math.max(0, this.health - result.healthDamage);
+    // Update eating timer
+    if (this.isEating) {
+      this.eatingTimeRemaining -= dt;
+      if (this.eatingTimeRemaining <= 0) {
+        this.isEating = false;
+        this.eatingTimeRemaining = 0;
+      }
+    }
+    
+    // Try to eat food if available and (hungry OR thirsty with thirst-restoring food)
+    // Only if not already eating
+    if (!this.isEating && foodManager) {
+      const isHungry = this.hunger < this.hungerThreshold;
+      const isThirsty = this.thirst < 50; // Same threshold as seeking water
+      
+      // Only try to eat if we actually need food/thirst
+      if (isHungry || isThirsty) {
+        const result = foodManager.eatFoodAtPosition(this.x, this.y, this.radius + 5, this.intelligence, this.metabolism);
+        if (result && (result.hungerGain > 0 || result.thirstGain > 0)) {
+          // Check if this food provides what we need:
+          // - If hungry: must provide hunger gain
+          // - If thirsty: must provide thirst gain (like cactus)
+          // - If both hungry and thirsty: must provide at least one
+          const providesNeededBenefit = (isHungry && result.hungerGain > 0) || 
+                                       (isThirsty && result.thirstGain > 0);
+          
+          if (providesNeededBenefit) {
+            // Start eating - pause for 5 seconds
+            this.isEating = true;
+            this.eatingTimeRemaining = this.eatingDuration;
+            
+            // Apply food benefits immediately - always apply both hunger and thirst if available
+            // (even if we only needed one, getting both is fine)
+            this.hunger = Math.min(this.hungerCapacity, this.hunger + result.hungerGain);
+            this.thirst = Math.min(this.thirstCapacity, this.thirst + result.thirstGain);
+            
+            // Cactus can prick: intelligence reduces harm chance. Cactus does not restore health.
+            // Damage resistance reduces actual damage taken
+            if (result.healthDamage && result.healthDamage > 0) {
+              const actualDamage = result.healthDamage * (1 - this.damageResistance);
+              this.health = Math.max(0, this.health - actualDamage);
+            }
+          }
         }
       }
     }
@@ -334,13 +396,46 @@ export class Squibble {
         this.directionChangeTimer = 0;
       }
     } else if (seekingWater && waterMap) {
-      const nearestWater = waterMap.findNearestWater(this.x, this.y, this.effectiveVision);
-      if (nearestWater) {
-        // Move towards the water
-        const dx = nearestWater.x - this.x;
-        const dy = nearestWater.y - this.y;
-        this.direction = Math.atan2(dy, dx);
-        this.directionChangeTimer = 0;
+      // Special behavior: if in desert and thirsty, try cacti first, then explore out of desert
+      const currentBiome = getBiomeAt?.(this.x, this.y) ?? -1;
+      const inDesert = currentBiome === Biome.DESERT;
+      
+      if (inDesert && foodManager) {
+        // First, try to find a cactus (cacti restore thirst)
+        const nearestCactus = foodManager.getNearestCactus(this.x, this.y, this.effectiveVision);
+        if (nearestCactus) {
+          // Move towards the cactus
+          const dx = nearestCactus.x - this.x;
+          const dy = nearestCactus.y - this.y;
+          this.direction = Math.atan2(dy, dx);
+          this.directionChangeTimer = 0;
+        } else {
+          // No cactus found - try to explore out of desert to find water
+          const exitDirection = this.findDesertExitDirection(getBiomeAt);
+          if (exitDirection !== null) {
+            this.direction = exitDirection;
+            this.directionChangeTimer = 0;
+          } else {
+            // Fallback: try normal water seeking
+            const nearestWater = waterMap.findNearestWater(this.x, this.y, this.effectiveVision);
+            if (nearestWater) {
+              const dx = nearestWater.x - this.x;
+              const dy = nearestWater.y - this.y;
+              this.direction = Math.atan2(dy, dx);
+              this.directionChangeTimer = 0;
+            }
+          }
+        }
+      } else {
+        // Normal water seeking (not in desert)
+        const nearestWater = waterMap.findNearestWater(this.x, this.y, this.effectiveVision);
+        if (nearestWater) {
+          // Move towards the water
+          const dx = nearestWater.x - this.x;
+          const dy = nearestWater.y - this.y;
+          this.direction = Math.atan2(dy, dx);
+          this.directionChangeTimer = 0;
+        }
       }
     } else if (this.seekingMate && squibbleManager) {
       // Seek a mate
@@ -417,24 +512,96 @@ export class Squibble {
       effectiveSpeed *= 0.85;
     }
     
-    if (!this.isBreeding && !this.isDrinking) {
-      // Evade water when possible: if next step would enter water and we're not seeking water, try to deflect
-      if (!inWater && waterMap && !seekingWater) {
+    // Ensure we have a valid direction (safety check)
+    if (isNaN(this.direction) || !isFinite(this.direction)) {
+      this.direction = Math.random() * 2 * Math.PI;
+    }
+    
+    if (!this.isBreeding && !this.isDrinking && !this.isEating) {
+      // If we're in water, handle water crossing behavior
+      if (inWater && waterMap) {
+        if (this.waterCrossingTarget) {
+          // We have a target - head towards it
+          const dx = this.waterCrossingTarget.x - this.x;
+          const dy = this.waterCrossingTarget.y - this.y;
+          const distSq = dx * dx + dy * dy;
+          
+          // If we've reached the target (within 2 tiles), clear it
+          const reachDistance = 128; // 2 tiles at default 64px tile size
+          if (distSq < reachDistance * reachDistance) {
+            this.waterCrossingTarget = null;
+          } else {
+            // Head towards the target
+            this.direction = Math.atan2(dy, dx);
+            this.directionChangeTimer = 0; // Reset direction change timer
+          }
+        } else {
+          // We're in water but don't have a target yet - find one in our current direction
+          const landTarget = waterMap.findLandInDirection(this.x, this.y, this.direction, 500);
+          if (landTarget) {
+            this.waterCrossingTarget = landTarget;
+          }
+        }
+      }
+      
+      // Check if next step would enter water
+      if (!inWater && waterMap) {
         const nextX = this.x + Math.cos(this.direction) * effectiveSpeed;
         const nextY = this.y + Math.sin(this.direction) * effectiveSpeed;
-        if (waterMap.isWaterAt(nextX, nextY)) {
-          const alt = this.tryAvoidWaterDirection(this.x, this.y, this.direction, effectiveSpeed, waterMap);
-          if (alt !== null) this.direction = alt;
+        const wouldEnterWater = waterMap.isWaterAt(nextX, nextY);
+        
+        if (wouldEnterWater) {
+          // Check if we have an active target (food, water, or mate)
+          const hasActiveTarget = (seekingFood && foodManager && foodManager.getNearestFood(this.x, this.y, this.effectiveVision)) ||
+                                  (seekingWater && waterMap && waterMap.findNearestWater(this.x, this.y, this.effectiveVision)) ||
+                                  (this.seekingMate && squibbleManager && squibbleManager.findPotentialMate(this));
+          
+          if (hasActiveTarget) {
+            // Willingness to cross water is based on swim stat
+            // Swim stat (0-1) maps to 50-80% base chance, with higher swim = more willing
+            // Formula: 0.5 + (swim * 0.3) gives 50-80% range
+            const crossChance = 0.5 + (this.swim * 0.3);
+            const willCross = Math.random() < crossChance;
+            
+            if (willCross) {
+              // Find a land target on the other side of the water
+              const landTarget = waterMap.findLandInDirection(this.x, this.y, this.direction, 500);
+              if (landTarget) {
+                this.waterCrossingTarget = landTarget;
+              }
+            } else {
+              // Decided not to cross - try to avoid
+              const alt = this.tryAvoidWaterDirection(this.x, this.y, this.direction, effectiveSpeed, waterMap);
+              if (alt !== null) this.direction = alt;
+            }
+          } else {
+            // No active target - still allow some chance to cross when wandering (20-50% based on swim)
+            const wanderCrossChance = 0.2 + (this.swim * 0.3);
+            const willCross = Math.random() < wanderCrossChance;
+            
+            if (willCross) {
+              // Find a land target on the other side of the water
+              const landTarget = waterMap.findLandInDirection(this.x, this.y, this.direction, 500);
+              if (landTarget) {
+                this.waterCrossingTarget = landTarget;
+              }
+            } else {
+              // Decided not to cross - try to avoid
+              const alt = this.tryAvoidWaterDirection(this.x, this.y, this.direction, effectiveSpeed, waterMap);
+              if (alt !== null) this.direction = alt;
+            }
+          }
         }
       }
       
       this.x += Math.cos(this.direction) * effectiveSpeed;
       this.y += Math.sin(this.direction) * effectiveSpeed;
       
-      // Just left water: apply wet for 30 seconds
+      // Just left water: apply wet for 30 seconds and clear crossing target
       const inWaterAfter = waterMap?.isWaterAt(this.x, this.y) ?? false;
       if (inWater && !inWaterAfter) {
         this.wetTimer = 30;
+        this.waterCrossingTarget = null; // Clear target when reaching land
       }
     }
     
@@ -463,6 +630,52 @@ export class Squibble {
       const ny = y + Math.sin(tryDir) * stepSize;
       if (!waterMap.isWaterAt(nx, ny)) return tryDir;
     }
+    return null;
+  }
+  
+  /**
+   * Find a direction that leads out of the desert biome
+   * Samples multiple directions and picks one that leads to non-desert biomes
+   */
+  private findDesertExitDirection(getBiomeAt?: (x: number, y: number) => number): number | null {
+    if (!getBiomeAt) return null;
+    
+    const sampleDistance = this.effectiveVision * 0.5; // Sample at half vision range
+    const numSamples = 16; // Sample 16 directions around the circle
+    const bestDirections: number[] = [];
+    
+    for (let i = 0; i < numSamples; i++) {
+      const angle = (i / numSamples) * 2 * Math.PI;
+      const sampleX = this.x + Math.cos(angle) * sampleDistance;
+      const sampleY = this.y + Math.sin(angle) * sampleDistance;
+      const sampleBiome = getBiomeAt(sampleX, sampleY);
+      
+      // Prefer directions that lead to non-desert biomes (plains, forest, tundra, or water)
+      if (sampleBiome !== Biome.DESERT && sampleBiome !== -1) {
+        bestDirections.push(angle);
+      }
+    }
+    
+    // If we found good directions, pick one (prefer straight ahead if possible)
+    if (bestDirections.length > 0) {
+      // Try to find one close to current direction
+      let bestDir = bestDirections[0];
+      let bestDiff = Math.abs(this.direction - bestDir);
+      if (bestDiff > Math.PI) bestDiff = 2 * Math.PI - bestDiff;
+      
+      for (const dir of bestDirections) {
+        let diff = Math.abs(this.direction - dir);
+        if (diff > Math.PI) diff = 2 * Math.PI - diff;
+        if (diff < bestDiff) {
+          bestDiff = diff;
+          bestDir = dir;
+        }
+      }
+      
+      return bestDir;
+    }
+    
+    // No good direction found - return null to fall back to normal water seeking
     return null;
   }
   
@@ -498,6 +711,9 @@ export class Squibble {
       intelligence: this.intelligence,
       swim: this.swim,
       metabolism: this.metabolism,
+      damage_resistance: this.damageResistance,
+      aggressiveness: this.aggressiveness,
+      damage: this.damage,
       wet_timer: this.wetTimer,
       litter_size: this.litterSize,
       gestation_duration: this.geneticGestationDuration,

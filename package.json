@@ -1,8 +1,8 @@
 {
   "name": "squibbles",
-  "version": "1.0.0",
+  "version": "0.9.0",
   "type": "module",
-  "description": "Squibbles Evolution Simulation - TypeScript Rewrite",
+  "description": "Squibbles Evolution Simulation",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",

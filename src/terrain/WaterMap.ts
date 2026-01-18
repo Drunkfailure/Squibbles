@@ -74,4 +74,42 @@ export class WaterMap {
     
     return nearestWater;
   }
+
+  /**
+   * Find a land tile on the other side of water in the given direction
+   * Searches along the direction vector for the first non-water tile
+   */
+  findLandInDirection(x: number, y: number, direction: number, maxSearchDistance: number = 500): { x: number; y: number } | null {
+    const ts = this.tileSize;
+    const stepSize = ts * 0.5; // Check every half tile
+    const steps = Math.floor(maxSearchDistance / stepSize);
+    
+    // Start searching a bit ahead (we're already in water or about to enter)
+    const startOffset = ts * 2;
+    
+    for (let i = 1; i <= steps; i++) {
+      const distance = startOffset + (i * stepSize);
+      const checkX = x + Math.cos(direction) * distance;
+      const checkY = y + Math.sin(direction) * distance;
+      
+      // Check if this position is within bounds
+      const cx = Math.floor(checkX / ts);
+      const cy = Math.floor(checkY / ts);
+      if (cx < 0 || cx >= this.cols || cy < 0 || cy >= this.rows) {
+        continue; // Out of bounds, keep searching
+      }
+      
+      // Check if this is land (not water)
+      if (!this.isWaterAt(checkX, checkY)) {
+        // Found land! Return the center of this tile
+        return {
+          x: (cx + 0.5) * ts,
+          y: (cy + 0.5) * ts
+        };
+      }
+    }
+    
+    // No land found in that direction
+    return null;
+  }
 }

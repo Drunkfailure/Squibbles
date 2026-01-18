@@ -12,10 +12,10 @@ export interface FoodConfig {
 }
 
 const SPECIES_CONFIG: Record<FoodSpecies, FoodConfig> = {
-  plainsshrub: { maxSlots: 3, regenDelay: 5.0, hungerGain: 10.0, thirstGain: 0.0 }, // 3 slots, moderate hunger
-  foresttree: { maxSlots: 4, regenDelay: 10.0, hungerGain: 15.0, thirstGain: 0.0 }, // 4 slots, moderate hunger
-  cactus: { maxSlots: 3, regenDelay: 25.0, hungerGain: 8.0, thirstGain: 8.0 }, // 3 slots, slow regrowth, hunger+thirst only; does NOT restore health; can prick (intelligence reduces harm chance)
-  tundratree: { maxSlots: 2, regenDelay: 10.0, hungerGain: 12.0, thirstGain: 0.0 }, // 2 slots, lichen; hunger scaled by metabolism in FoodManager (slow=more, fast=less)
+  plainsshrub: { maxSlots: 3, regenDelay: 10.0, hungerGain: 18.0, thirstGain: 0.0 }, // 3 slots, moderate hunger, increased respawn time
+  foresttree: { maxSlots: 4, regenDelay: 20.0, hungerGain: 23.0, thirstGain: 0.0 }, // 4 slots, moderate hunger, increased respawn time
+  cactus: { maxSlots: 3, regenDelay: 40.0, hungerGain: 15.0, thirstGain: 8.0 }, // 3 slots, slow regrowth, hunger+thirst only; does NOT restore health; can prick (intelligence reduces harm chance), increased respawn time
+  tundratree: { maxSlots: 2, regenDelay: 20.0, hungerGain: 20.0, thirstGain: 0.0 }, // 2 slots, lichen; hunger scaled by metabolism in FoodManager (slow=more, fast=less), increased respawn time
 };
 
 export class Food {

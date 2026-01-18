@@ -254,6 +254,27 @@ export const POLYGENIC_TRAITS: Record<string, PolygenicTrait> = {
     baseValue: 0.5,
     outputRange: [0, 1], // 0 = slow (less drain, more from lichen), 1 = fast (more drain, less from lichen)
   },
+  damageResistance: {
+    name: 'Damage Resistance',
+    lociCount: 5,
+    lociRange: [-0.05, 0.05],
+    baseValue: 0.0,
+    outputRange: [0, 0.5], // 0 = no resistance, 0.5 = 50% damage resistance
+  },
+  aggressiveness: {
+    name: 'Aggressiveness',
+    lociCount: 5,
+    lociRange: [-0.08, 0.08],
+    baseValue: 0.5,
+    outputRange: [0, 1], // 0 = flee from predators, 1 = stand ground (for future predator update)
+  },
+  damage: {
+    name: 'Damage',
+    lociCount: 5,
+    lociRange: [-2, 2],
+    baseValue: 5.0,
+    outputRange: [1, 15], // Combat damage/ability (for future combat system)
+  },
 };
 
 /**
@@ -360,6 +381,9 @@ export interface Genome {
     intelligence: PolygenicGenotype;
     swim: PolygenicGenotype;
     metabolism: PolygenicGenotype;
+    damageResistance: PolygenicGenotype;
+    aggressiveness: PolygenicGenotype;
+    damage: PolygenicGenotype;
   };
   
   // Multi-allele traits (discrete visual characteristics)
@@ -410,6 +434,9 @@ export function generateRandomGenome(): Genome {
       intelligence: randomPolygenicGenotype(POLYGENIC_TRAITS.intelligence),
       swim: randomPolygenicGenotype(POLYGENIC_TRAITS.swim),
       metabolism: randomPolygenicGenotype(POLYGENIC_TRAITS.metabolism),
+      damageResistance: randomPolygenicGenotype(POLYGENIC_TRAITS.damageResistance),
+      aggressiveness: randomPolygenicGenotype(POLYGENIC_TRAITS.aggressiveness),
+      damage: randomPolygenicGenotype(POLYGENIC_TRAITS.damage),
     },
     multiAllele: {
       hornStyle: randomMultiAlleleGenotype(MULTI_ALLELE_TRAITS.hornStyle),
@@ -450,6 +477,9 @@ export function inheritGenome(
       intelligence: inheritPolygenic(parent1.polygenic.intelligence, parent2.polygenic.intelligence, POLYGENIC_TRAITS.intelligence, mutationConfig),
       swim: inheritPolygenic(parent1.polygenic.swim, parent2.polygenic.swim, POLYGENIC_TRAITS.swim, mutationConfig),
       metabolism: inheritPolygenic(parent1.polygenic.metabolism, parent2.polygenic.metabolism, POLYGENIC_TRAITS.metabolism, mutationConfig),
+      damageResistance: inheritPolygenic(parent1.polygenic.damageResistance, parent2.polygenic.damageResistance, POLYGENIC_TRAITS.damageResistance, mutationConfig),
+      aggressiveness: inheritPolygenic(parent1.polygenic.aggressiveness, parent2.polygenic.aggressiveness, POLYGENIC_TRAITS.aggressiveness, mutationConfig),
+      damage: inheritPolygenic(parent1.polygenic.damage, parent2.polygenic.damage, POLYGENIC_TRAITS.damage, mutationConfig),
     },
     multiAllele: {
       hornStyle: inheritMultiAllele(parent1.multiAllele.hornStyle, parent2.multiAllele.hornStyle, MULTI_ALLELE_TRAITS.hornStyle, mutationConfig),
@@ -485,6 +515,9 @@ export interface ExpressedPhenotypes {
   intelligence: number;
   swim: number;
   metabolism: number;
+  damageResistance: number;
+  aggressiveness: number;
+  damage: number;
   
   // Visual traits (strings)
   hornStyle: string;
@@ -516,6 +549,9 @@ export function expressGenome(genome: Genome): ExpressedPhenotypes {
     intelligence: getPolygenicPhenotype(POLYGENIC_TRAITS.intelligence, genome.polygenic.intelligence),
     swim: getPolygenicPhenotype(POLYGENIC_TRAITS.swim, genome.polygenic.swim),
     metabolism: getPolygenicPhenotype(POLYGENIC_TRAITS.metabolism, genome.polygenic.metabolism),
+    damageResistance: getPolygenicPhenotype(POLYGENIC_TRAITS.damageResistance, genome.polygenic.damageResistance),
+    aggressiveness: getPolygenicPhenotype(POLYGENIC_TRAITS.aggressiveness, genome.polygenic.aggressiveness),
+    damage: getPolygenicPhenotype(POLYGENIC_TRAITS.damage, genome.polygenic.damage),
     
     hornStyle: getMultiAllelePhenotype(MULTI_ALLELE_TRAITS.hornStyle, genome.multiAllele.hornStyle),
     eyeType: getMultiAllelePhenotype(MULTI_ALLELE_TRAITS.eyeType, genome.multiAllele.eyeType),

@@ -17,6 +17,18 @@ export class SimulationUI {
   private statsText: Text | null = null;
   private squibbleDetailPanel: Graphics | null = null;
   private squibbleDetailText: Text | null = null;
+  private page1Button: Graphics | null = null;
+  private page1ButtonText: Text | null = null;
+  private page2Button: Graphics | null = null;
+  private page2ButtonText: Text | null = null;
+  private currentPage: number = 1;
+  private lastSelectedSquibbleId: number | null = null;
+  
+  // Panel bounds for click detection
+  private panelX: number = 0;
+  private panelY: number = 0;
+  private panelWidth: number = 0;
+  private panelHeight: number = 0;
   
   constructor(screenWidth: number, screenHeight: number) {
     this.screenWidth = screenWidth;
@@ -127,13 +139,59 @@ export class SimulationUI {
       this.squibbleDetailText.destroy();
       this.squibbleDetailText = null;
     }
+    if (this.page1Button) {
+      this.container.removeChild(this.page1Button);
+      this.page1Button.destroy();
+      this.page1Button = null;
+    }
+    if (this.page1ButtonText) {
+      this.container.removeChild(this.page1ButtonText);
+      this.page1ButtonText.destroy();
+      this.page1ButtonText = null;
+    }
+    if (this.page2Button) {
+      this.container.removeChild(this.page2Button);
+      this.page2Button.destroy();
+      this.page2Button = null;
+    }
+    if (this.page2ButtonText) {
+      this.container.removeChild(this.page2ButtonText);
+      this.page2ButtonText.destroy();
+      this.page2ButtonText = null;
+    }
     
-    if (!squibble) return;
+    if (!squibble) {
+      this.lastSelectedSquibbleId = null;
+      // Clear panel bounds when no squibble is selected
+      this.panelX = 0;
+      this.panelY = 0;
+      this.panelWidth = 0;
+      this.panelHeight = 0;
+      return;
+    }
+    
+    // Reset to page 1 if a different squibble is selected
+    const stats = squibble.getStats();
+    if (this.lastSelectedSquibbleId !== stats.id) {
+      this.currentPage = 1;
+      this.lastSelectedSquibbleId = stats.id;
+    }
     
     const panelWidth = 280;
-    const panelHeight = 650; // Increased to accommodate all stats including new reproduction traits
+    const buttonHeight = 30;
+    const buttonMargin = 15;
+    const textAreaHeight = 480; // Increased height for text content (accommodates all stats)
+    const panelHeight = textAreaHeight + buttonHeight + buttonMargin * 2 + 50; // Total panel height (~590px, extended by 50px)
     const panelX = this.screenWidth - panelWidth - 10;
     const panelY = 10;
+    // Position buttons at the bottom of the panel (with margin from bottom)
+    const buttonY = panelY + panelHeight - buttonHeight - buttonMargin;
+    
+    // Store panel bounds for click detection
+    this.panelX = panelX;
+    this.panelY = panelY;
+    this.panelWidth = panelWidth;
+    this.panelHeight = panelHeight;
     
     // Draw detail panel background
     this.squibbleDetailPanel = new Graphics();
@@ -143,16 +201,23 @@ export class SimulationUI {
       .endFill();
     this.container.addChild(this.squibbleDetailPanel);
     
-    // Create detail text
+    // Create detail text style
     const style = new TextStyle({
       fontFamily: FontLoader.getFontFamily(),
       fontSize: 16,
       fill: 0xffffff,
     });
     
-    const stats = squibble.getStats();
-    const lines: string[] = [
+    const buttonStyle = new TextStyle({
+      fontFamily: FontLoader.getFontFamily(),
+      fontSize: 14,
+      fill: 0xffffff,
+    });
+    
+    // Page 1: Basic Info, Health, Traits, Breeding
+    const page1Lines: string[] = [
       '=== Selected Squibble ===',
+      `Page ${this.currentPage}/2`,
       '',
       `ID: ${stats.id || 'N/A'}`,
       `Gender: ${stats.gender || 'unknown'}`,
@@ -169,6 +234,9 @@ export class SimulationUI {
       `  Intelligence: ${((stats.intelligence ?? 0.5) * 100).toFixed(1)}%`,
       `  Swim: ${((stats.swim ?? 0.5) * 100).toFixed(1)}%`,
       `  Metabolism: ${((stats.metabolism ?? 0.5) * 100).toFixed(1)}%`,
+      `  Damage Resistance: ${((stats.damage_resistance ?? 0) * 100).toFixed(1)}%`,
+      `  Aggressiveness: ${((stats.aggressiveness ?? 0.5) * 100).toFixed(1)}%`,
+      `  Damage: ${(stats.damage ?? 5).toFixed(1)}`,
       `  Wet: ${(stats.wet_timer ?? 0) > 0 ? (stats.wet_timer ?? 0).toFixed(1) + 's' : 'No'}`,
       '',
       'Breeding:',
@@ -176,6 +244,12 @@ export class SimulationUI {
       `  Min Attractiveness: ${(stats.min_attractiveness * 100).toFixed(1)}%`,
       `  Virility: ${(stats.virility * 100).toFixed(1)}%`,
       `  Size: ${(stats.size * 100).toFixed(0)}%`,
+    ];
+    
+    // Page 2: Reproduction, Breeding Status, Status, Appearance
+    const page2Lines: string[] = [
+      '=== Selected Squibble ===',
+      `Page ${this.currentPage}/2`,
       '',
       'Reproduction:',
       `  Litter Size: ${stats.litter_size?.toFixed(1) || 'N/A'} (avg)`,
@@ -200,13 +274,78 @@ export class SimulationUI {
       `  Body: ${stats.body_shape}`,
     ];
     
+    // Display current page
+    const lines = this.currentPage === 1 ? page1Lines : page2Lines;
+    
     this.squibbleDetailText = new Text(lines.join('\n'), style);
     this.squibbleDetailText.x = panelX + 10;
     this.squibbleDetailText.y = panelY + 10;
+    // Ensure text doesn't overlap with buttons
+    this.squibbleDetailText.style.wordWrap = true;
+    this.squibbleDetailText.style.wordWrapWidth = panelWidth - 20;
     this.container.addChild(this.squibbleDetailText);
+    
+    // Create page navigation buttons
+    const buttonWidth = (panelWidth - 20) / 2;
+    const buttonSpacing = 5;
+    
+    // Page 1 button
+    const page1ButtonX = panelX + 10;
+    this.page1Button = new Graphics();
+    this.page1Button
+      .beginFill(this.currentPage === 1 ? 0x444444 : 0x222222, 0.9)
+      .drawRect(page1ButtonX, buttonY, buttonWidth, buttonHeight)
+      .endFill();
+    this.page1Button.interactive = true;
+    this.page1Button.buttonMode = true;
+    this.page1Button.on('pointerdown', () => {
+      this.currentPage = 1;
+      this.drawSquibbleDetails(squibble);
+    });
+    this.container.addChild(this.page1Button);
+    
+    this.page1ButtonText = new Text('Page 1', buttonStyle);
+    this.page1ButtonText.x = page1ButtonX + buttonWidth / 2 - this.page1ButtonText.width / 2;
+    this.page1ButtonText.y = buttonY + buttonHeight / 2 - this.page1ButtonText.height / 2;
+    this.container.addChild(this.page1ButtonText);
+    
+    // Page 2 button
+    const page2ButtonX = page1ButtonX + buttonWidth + buttonSpacing;
+    this.page2Button = new Graphics();
+    this.page2Button
+      .beginFill(this.currentPage === 2 ? 0x444444 : 0x222222, 0.9)
+      .drawRect(page2ButtonX, buttonY, buttonWidth, buttonHeight)
+      .endFill();
+    this.page2Button.interactive = true;
+    this.page2Button.buttonMode = true;
+    this.page2Button.on('pointerdown', () => {
+      this.currentPage = 2;
+      this.drawSquibbleDetails(squibble);
+    });
+    this.container.addChild(this.page2Button);
+    
+    this.page2ButtonText = new Text('Page 2', buttonStyle);
+    this.page2ButtonText.x = page2ButtonX + buttonWidth / 2 - this.page2ButtonText.width / 2;
+    this.page2ButtonText.y = buttonY + buttonHeight / 2 - this.page2ButtonText.height / 2;
+    this.container.addChild(this.page2ButtonText);
   }
   
   toggleControls(): void {
     this.showControls = !this.showControls;
+  }
+  
+  /**
+   * Check if a screen coordinate is inside the squibble detail panel
+   */
+  isPointInDetailPanel(screenX: number, screenY: number): boolean {
+    // Only check if panel exists (a squibble is selected)
+    if (!this.squibbleDetailPanel) {
+      return false;
+    }
+    
+    return screenX >= this.panelX && 
+           screenX <= this.panelX + this.panelWidth &&
+           screenY >= this.panelY && 
+           screenY <= this.panelY + this.panelHeight;
   }
 }

@@ -52,6 +52,9 @@ export class StatsRecorder {
     this.registerStat('avg_intelligence', 'Avg Intelligence', '#3F51B5', 'traits');
     this.registerStat('avg_swim', 'Avg Swim', '#009688', 'traits');
     this.registerStat('avg_metabolism', 'Avg Metabolism', '#FF5722', 'traits');
+    this.registerStat('avg_damage_resistance', 'Avg Damage Resistance', '#9E9E9E', 'traits');
+    this.registerStat('avg_aggressiveness', 'Avg Aggressiveness', '#F44336', 'traits');
+    this.registerStat('avg_damage', 'Avg Damage', '#E91E63', 'traits');
     
     // Behavior stats
     this.registerStat('seeking_food_count', 'Seeking Food', '#FFC107', 'behavior');

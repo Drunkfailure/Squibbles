@@ -16,6 +16,7 @@ import { EventManager } from './EventManager';
 import { SimulationUI } from '../ui/SimulationUI';
 import { StatsRecorder } from '../stats/StatsRecorder';
 import { StatsGraphRenderer } from '../stats/StatsGraphRenderer';
+import { EscMenu } from '../ui/EscMenu';
 
 export class Simulation extends Game {
   private squibbleManager: SquibbleManager;
@@ -48,6 +49,10 @@ export class Simulation extends Game {
   private totalDeaths: number = 0;
   private lastAliveCount: number = 0;
   
+  // ESC menu
+  private escMenu: EscMenu;
+  private onReturnToTitle: (() => void) | null = null;
+  
   /** Base size for tree/food sprites in world units. Smaller than tile so they feel placed in the world, not filling it. */
   private static readonly TREE_FOOD_SPRITE_WORLD_SIZE = 44;
   
@@ -65,6 +70,9 @@ export class Simulation extends Game {
     // Stats tracking
     this.statsRecorder = new StatsRecorder(1.0); // Record every 1 second
     this.statsGraphRenderer = new StatsGraphRenderer(this.statsRecorder);
+    
+    // ESC menu
+    this.escMenu = new EscMenu();
     
     // Create containers
     this.terrainContainer = new Container();
@@ -216,6 +224,7 @@ export class Simulation extends Game {
       let totalHunger = 0, totalThirst = 0, totalHealth = 0;
       let totalSpeed = 0, totalVision = 0;
       let totalAttractiveness = 0, totalVirility = 0, totalMaxAge = 0, totalIntelligence = 0, totalSwim = 0, totalMetabolism = 0;
+      let totalDamageResistance = 0, totalAggressiveness = 0, totalDamage = 0;
       let seekingFood = 0, seekingMate = 0, pregnant = 0, breeding = 0;
       let males = 0, females = 0;
       
@@ -231,6 +240,9 @@ export class Simulation extends Game {
         totalIntelligence += s.intelligence;
         totalSwim += s.swim;
         totalMetabolism += s.metabolism;
+        totalDamageResistance += s.damageResistance;
+        totalAggressiveness += s.aggressiveness;
+        totalDamage += s.damage;
         
         if (s.hunger < 70) seekingFood++;
         if (s.seekingMate) seekingMate++;
@@ -251,6 +263,9 @@ export class Simulation extends Game {
       stats.avg_intelligence = totalIntelligence / currentAlive;
       stats.avg_swim = totalSwim / currentAlive;
       stats.avg_metabolism = totalMetabolism / currentAlive;
+      stats.avg_damage_resistance = totalDamageResistance / currentAlive;
+      stats.avg_aggressiveness = totalAggressiveness / currentAlive;
+      stats.avg_damage = totalDamage / currentAlive;
       stats.seeking_food_count = seekingFood;
       stats.seeking_mate_count = seekingMate;
       stats.pregnant_count = pregnant;
@@ -459,11 +474,14 @@ export class Simulation extends Game {
   }
   
   protected setupInputHandling(): void {
-    super.setupInputHandling();
-    
-    // Handle zoom
+    // Don't call super - we handle all input ourselves to avoid ESC conflicts
+    // Handle zoom and all simulation controls
     window.addEventListener('keydown', (e) => {
-      if (e.code === 'BracketLeft') { // [
+      if (e.code === 'Space') {
+        // Pause/Resume
+        e.preventDefault();
+        this.togglePause();
+      } else if (e.code === 'BracketLeft') { // [
         this.zoomLevel = Math.max(this.minZoom, this.zoomLevel - this.zoomSpeed);
       } else if (e.code === 'BracketRight') { // ]
         this.zoomLevel = Math.min(this.maxZoom, this.zoomLevel + this.zoomSpeed);
@@ -498,8 +516,17 @@ export class Simulation extends Game {
         // Show stats graphs
         this.statsGraphRenderer.show();
       } else if (e.code === 'Escape') {
-        // Deselect squibble (handled in parent class, but also clear selection)
-        this.selectedSquibble = null;
+        // Handle ESC with priority: graphs > menu > selection
+        if (this.statsGraphRenderer.isGraphVisible()) {
+          // Close graphs if open
+          this.statsGraphRenderer.hide();
+        } else if (this.escMenu.isMenuVisible()) {
+          // Menu handles its own ESC (resume)
+        } else {
+          // Show ESC menu
+          e.preventDefault();
+          this.showEscMenu();
+        }
       }
     });
     
@@ -524,6 +551,12 @@ export class Simulation extends Game {
           // Shift+Click: Add new squibble
           this.squibbleManager.addSquibble(worldX, worldY);
         } else {
+          // Check if click is inside the stats panel - if so, don't deselect
+          if (this.ui.isPointInDetailPanel(mousePos.x, mousePos.y)) {
+            // Click is inside the stats panel, don't deselect
+            return;
+          }
+          
           // Regular click: Select squibble (camera will auto-follow)
           const clickedSquibble = this.findSquibbleAtPosition(worldX, worldY);
           if (clickedSquibble) {
@@ -616,8 +649,8 @@ export class Simulation extends Game {
       icons.push('love');
     }
     
-    // Hunger icon (show when below 50)
-    if (squibble.hunger < 50.0) {
+    // Hunger icon (show when below 50 OR when actively eating)
+    if (squibble.hunger < 50.0 || squibble.isEating) {
       icons.push('hunger');
     }
     
@@ -653,6 +686,42 @@ export class Simulation extends Game {
         this.entityContainer.addChild(sprite);
       }
       iconX += iconSize + iconSpacing;
+    }
+  }
+  
+  /**
+   * Set callback for returning to title screen
+   */
+  setReturnToTitleCallback(callback: () => void): void {
+    this.onReturnToTitle = callback;
+  }
+  
+  /**
+   * Show the ESC menu
+   */
+  private async showEscMenu(): Promise<void> {
+    // Pause the simulation
+    this.pause();
+    
+    // Show menu
+    const result = await this.escMenu.show();
+    
+    // Handle menu action
+    switch (result.action) {
+      case 'resume':
+        // Resume simulation
+        this.resume();
+        break;
+      case 'settings':
+        // Settings placeholder - do nothing for now
+        this.resume();
+        break;
+      case 'returnToTitle':
+        // Return to title screen
+        if (this.onReturnToTitle) {
+          this.onReturnToTitle();
+        }
+        break;
     }
   }
   
