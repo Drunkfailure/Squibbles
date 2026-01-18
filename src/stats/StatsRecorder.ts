@@ -68,6 +68,29 @@ export class StatsRecorder {
     // Gender distribution
     this.registerStat('male_count', 'Males', '#2196F3', 'demographics');
     this.registerStat('female_count', 'Females', '#E91E63', 'demographics');
+    
+    // Gnawlin stats (prefixed with gnawlin_)
+    this.registerStat('gnawlin_population', 'Gnawlin Population', '#FF6B6B', 'population');
+    this.registerStat('gnawlin_avg_hunger', 'Gnawlin Avg Hunger', '#FF9800', 'health');
+    this.registerStat('gnawlin_avg_thirst', 'Gnawlin Avg Thirst', '#2196F3', 'health');
+    this.registerStat('gnawlin_avg_health', 'Gnawlin Avg Health', '#E91E63', 'health');
+    this.registerStat('gnawlin_avg_speed', 'Gnawlin Avg Speed', '#9C27B0', 'traits');
+    this.registerStat('gnawlin_avg_vision', 'Gnawlin Avg Vision', '#00BCD4', 'traits');
+    this.registerStat('gnawlin_avg_virility', 'Gnawlin Avg Virility', '#7C4DFF', 'traits');
+    this.registerStat('gnawlin_avg_max_age', 'Gnawlin Avg Max Age', '#795548', 'traits');
+    this.registerStat('gnawlin_avg_intelligence', 'Gnawlin Avg Intelligence', '#3F51B5', 'traits');
+    this.registerStat('gnawlin_avg_swim', 'Gnawlin Avg Swim', '#009688', 'traits');
+    this.registerStat('gnawlin_avg_metabolism', 'Gnawlin Avg Metabolism', '#FF5722', 'traits');
+    this.registerStat('gnawlin_avg_damage_resistance', 'Gnawlin Avg Damage Resistance', '#9E9E9E', 'traits');
+    this.registerStat('gnawlin_avg_aggressiveness', 'Gnawlin Avg Aggressiveness', '#F44336', 'traits');
+    this.registerStat('gnawlin_avg_damage', 'Gnawlin Avg Damage', '#E91E63', 'traits');
+    this.registerStat('gnawlin_avg_accuracy', 'Gnawlin Avg Accuracy', '#00E676', 'traits');
+    this.registerStat('gnawlin_seeking_food_count', 'Gnawlin Seeking Food', '#FFC107', 'behavior');
+    this.registerStat('gnawlin_seeking_mate_count', 'Gnawlin Seeking Mate', '#E91E63', 'behavior');
+    this.registerStat('gnawlin_pregnant_count', 'Gnawlin Pregnant', '#9C27B0', 'behavior');
+    this.registerStat('gnawlin_breeding_count', 'Gnawlin Breeding', '#F44336', 'behavior');
+    this.registerStat('gnawlin_male_count', 'Gnawlin Males', '#2196F3', 'demographics');
+    this.registerStat('gnawlin_female_count', 'Gnawlin Females', '#E91E63', 'demographics');
   }
   
   /**

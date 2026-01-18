@@ -14,6 +14,9 @@ export class StatsGraphRenderer {
   private selectedStats: Set<string> = new Set();
   private hoveredPoint: { stat: string; index: number } | null = null;
   
+  // Creature type filter
+  private currentCreatureType: 'squibble' | 'gnawlin' = 'squibble';
+  
   // Graph dimensions
   private graphPadding = { top: 60, right: 200, bottom: 60, left: 80 };
   private legendWidth = 180;
@@ -36,10 +39,14 @@ export class StatsGraphRenderer {
   constructor(recorder: StatsRecorder) {
     this.recorder = recorder;
     
-    // Default selected stats
-    this.selectedStats.add('population');
-    this.selectedStats.add('avg_hunger');
-    this.selectedStats.add('avg_speed');
+    // Default selected stats (will be filtered by creature type)
+    // Initialize with Squibble stats
+    const defaultStats = this.getDefaultStatsForType('squibble');
+    defaultStats.forEach(stat => {
+      if (this.recorder.getStatConfig(stat)) {
+        this.selectedStats.add(stat);
+      }
+    });
   }
   
   /**
@@ -156,10 +163,21 @@ export class StatsGraphRenderer {
       border-bottom: 2px solid #4a4a6a;
     `;
     
+    const titleContainer = document.createElement('div');
+    titleContainer.style.cssText = 'display: flex; align-items: center; gap: 20px; flex: 1;';
+    
+    // Navigation arrows
+    const prevBtn = this.createNavButton('◀', () => this.switchCreatureType('squibble'), this.currentCreatureType === 'squibble');
     const title = document.createElement('h1');
-    title.textContent = 'Simulation Statistics';
+    title.id = 'stats-title';
+    title.textContent = `Simulation Statistics - ${this.currentCreatureType.charAt(0).toUpperCase() + this.currentCreatureType.slice(1)}s`;
     title.style.cssText = 'margin: 0; color: #fff; font-size: 24px;';
-    header.appendChild(title);
+    const nextBtn = this.createNavButton('▶', () => this.switchCreatureType('gnawlin'), this.currentCreatureType === 'gnawlin');
+    
+    titleContainer.appendChild(prevBtn);
+    titleContainer.appendChild(title);
+    titleContainer.appendChild(nextBtn);
+    header.appendChild(titleContainer);
     
     const buttonContainer = document.createElement('div');
     buttonContainer.style.cssText = 'display: flex; gap: 10px;';
@@ -247,6 +265,111 @@ export class StatsGraphRenderer {
   }
   
   /**
+   * Create a navigation button for switching creature types
+   */
+  private createNavButton(text: string, onClick: () => void, isActive: boolean): HTMLButtonElement {
+    const btn = document.createElement('button');
+    btn.textContent = text;
+    btn.style.cssText = `
+      padding: 8px 16px;
+      background: ${isActive ? '#3498db' : '#555'};
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: ${isActive ? 'default' : 'pointer'};
+      font-size: 18px;
+      font-weight: bold;
+      transition: opacity 0.2s;
+      opacity: ${isActive ? '1' : '0.6'};
+    `;
+    if (!isActive) {
+      btn.onmouseover = () => btn.style.opacity = '1';
+      btn.onmouseout = () => btn.style.opacity = '0.6';
+      btn.onclick = onClick;
+    }
+    return btn;
+  }
+  
+  /**
+   * Switch between Squibble and Gnawlin stats
+   */
+  private switchCreatureType(type: 'squibble' | 'gnawlin'): void {
+    if (this.currentCreatureType === type) return;
+    
+    this.currentCreatureType = type;
+    
+    // Update title
+    const title = this.container?.querySelector('#stats-title');
+    if (title) {
+      title.textContent = `Simulation Statistics - ${type.charAt(0).toUpperCase() + type.slice(1)}s`;
+    }
+    
+    // Update navigation buttons (they're in the title container)
+    const titleContainer = this.container?.querySelector('#stats-title')?.parentElement;
+    if (titleContainer) {
+      const buttons = titleContainer.querySelectorAll('button');
+      if (buttons.length >= 2) {
+        const prevBtn = buttons[0] as HTMLButtonElement;
+        const nextBtn = buttons[1] as HTMLButtonElement;
+        
+        prevBtn.style.background = type === 'squibble' ? '#3498db' : '#555';
+        prevBtn.style.opacity = type === 'squibble' ? '1' : '0.6';
+        prevBtn.style.cursor = type === 'squibble' ? 'default' : 'pointer';
+        if (type === 'squibble') {
+          prevBtn.onclick = null;
+        } else {
+          prevBtn.onclick = () => this.switchCreatureType('squibble');
+        }
+        
+        nextBtn.style.background = type === 'gnawlin' ? '#3498db' : '#555';
+        nextBtn.style.opacity = type === 'gnawlin' ? '1' : '0.6';
+        nextBtn.style.cursor = type === 'gnawlin' ? 'default' : 'pointer';
+        if (type === 'gnawlin') {
+          nextBtn.onclick = null;
+        } else {
+          nextBtn.onclick = () => this.switchCreatureType('gnawlin');
+        }
+      }
+    }
+    
+    // Rebuild sidebar with filtered stats
+    const sidebar = this.container?.querySelector('#stats-sidebar');
+    if (sidebar) {
+      const content = sidebar.parentElement;
+      if (content) {
+        sidebar.remove();
+        const newSidebar = this.createSidebar();
+        content.insertBefore(newSidebar, content.firstChild);
+      }
+    }
+    
+    // Clear and reset selected stats for new creature type
+    this.selectedStats.clear();
+    const defaultStats = this.getDefaultStatsForType(type);
+    defaultStats.forEach(stat => {
+      // Only add if the stat exists in the recorder
+      if (this.recorder.getStatConfig(stat)) {
+        this.selectedStats.add(stat);
+      }
+    });
+    
+    // Re-render
+    this.render();
+  }
+  
+  /**
+   * Get default stats for a creature type
+   */
+  private getDefaultStatsForType(type: 'squibble' | 'gnawlin'): string[] {
+    const prefix = type === 'squibble' ? '' : 'gnawlin_';
+    return [
+      `${prefix}population`,
+      `${prefix}avg_hunger`,
+      `${prefix}avg_speed`,
+    ];
+  }
+  
+  /**
    * Create a styled button
    */
   private createButton(text: string, onClick: () => void, bgColor: string = '#3498db'): HTMLButtonElement {
@@ -269,10 +392,11 @@ export class StatsGraphRenderer {
   }
   
   /**
-   * Create the sidebar with stat checkboxes
+   * Create the sidebar with stat checkboxes (filtered by creature type)
    */
   private createSidebar(): HTMLDivElement {
     const sidebar = document.createElement('div');
+    sidebar.id = 'stats-sidebar';
     sidebar.style.cssText = `
       width: 250px;
       background: #1a1a2e;
@@ -282,12 +406,25 @@ export class StatsGraphRenderer {
     `;
     
     const title = document.createElement('h3');
-    title.textContent = 'Select Stats';
+    title.textContent = `Select ${this.currentCreatureType.charAt(0).toUpperCase() + this.currentCreatureType.slice(1)} Stats`;
     title.style.cssText = 'color: #fff; margin: 0 0 15px 0;';
     sidebar.appendChild(title);
     
+    // Filter stats by creature type
+    const prefix = this.currentCreatureType === 'squibble' ? '' : 'gnawlin_';
+    const allStats = this.recorder.getStatConfigs();
+    const filteredStats = allStats.filter(stat => {
+      // Squibble stats don't have prefix, Gnawlin stats have 'gnawlin_' prefix
+      if (this.currentCreatureType === 'squibble') {
+        return !stat.name.startsWith('gnawlin_');
+      } else {
+        return stat.name.startsWith('gnawlin_');
+      }
+    });
+    
     // Group by category
-    const categories = this.recorder.getCategories();
+    const categories = new Set<string>();
+    filteredStats.forEach(stat => categories.add(stat.category));
     
     for (const category of categories) {
       const categoryDiv = document.createElement('div');
@@ -298,7 +435,7 @@ export class StatsGraphRenderer {
       categoryTitle.style.cssText = 'color: #888; margin: 0 0 8px 0; font-size: 12px; text-transform: uppercase;';
       categoryDiv.appendChild(categoryTitle);
       
-      const stats = this.recorder.getStatsByCategory(category);
+      const stats = filteredStats.filter(s => s.category === category);
       for (const stat of stats) {
         const label = document.createElement('label');
         label.style.cssText = `
@@ -332,9 +469,14 @@ export class StatsGraphRenderer {
           border-radius: 2px;
         `;
         
+        // Remove prefix from label for display
+        const displayLabel = stat.name.startsWith('gnawlin_') 
+          ? stat.label.replace(/^Gnawlin /i, '') 
+          : stat.label;
+        
         label.appendChild(checkbox);
         label.appendChild(colorBox);
-        label.appendChild(document.createTextNode(stat.label));
+        label.appendChild(document.createTextNode(displayLabel));
         categoryDiv.appendChild(label);
       }
       
@@ -400,11 +542,15 @@ export class StatsGraphRenderer {
     const maxTime = dataPoints[dataPoints.length - 1].time;
     const timeRange = maxTime - minTime || 1;
     
-    // Find value range across all selected stats
+    // Find value range across all selected stats (filtered by creature type)
     let minValue = Infinity;
     let maxValue = -Infinity;
     
     for (const statName of this.selectedStats) {
+      // Only consider stats that match the current creature type
+      if (this.currentCreatureType === 'squibble' && statName.startsWith('gnawlin_')) continue;
+      if (this.currentCreatureType === 'gnawlin' && !statName.startsWith('gnawlin_')) continue;
+      
       for (const dp of dataPoints) {
         const val = dp[statName];
         if (val !== undefined) {
@@ -423,9 +569,13 @@ export class StatsGraphRenderer {
     // Draw grid
     this.drawGrid(ctx, graphX, graphY, graphWidth, graphHeight, minTime, maxTime, minValue, maxValue);
     
-    // Draw each selected stat
+    // Draw each selected stat (filtered by creature type)
     let legendY = graphY;
     for (const statName of this.selectedStats) {
+      // Only show stats that match the current creature type
+      if (this.currentCreatureType === 'squibble' && statName.startsWith('gnawlin_')) continue;
+      if (this.currentCreatureType === 'gnawlin' && !statName.startsWith('gnawlin_')) continue;
+      
       const config = this.recorder.getStatConfig(statName);
       if (!config) continue;
       

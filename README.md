@@ -311,5 +311,4 @@ These traits are controlled by multiple genetic loci, resulting in smooth, conti
 - Advanced genetic analysis tools
 - Population migration patterns
 - Seasonal changes
-- Family Tree to track traits
 - Disease and immunity systems

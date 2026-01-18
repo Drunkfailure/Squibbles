@@ -103,6 +103,14 @@ export class AssetLoader {
         console.warn('Fetus icon not found, will skip');
       }
       
+      // Load sword icon for combat
+      try {
+        const swordIcon = await Assets.load('Assets/sword.png');
+        this.iconTextures.set('sword', swordIcon);
+      } catch (e) {
+        console.warn('Sword icon not found, will skip');
+      }
+      
       // health.png doesn't exist, so we'll skip it
       // If you add it later, uncomment this:
       /*

@@ -5,32 +5,38 @@
 import { createChart, Data, Datum } from 'family-chart';
 import 'family-chart/styles/family-chart.css';
 import { Squibble } from '../creatures/Squibble';
+import { Gnawlin } from '../creatures/Gnawlin';
 import { FontLoader } from '../utils/FontLoader';
+
+// Union type for creatures that can be in the family tree
+type Creature = Squibble | Gnawlin;
 
 export class FamilyTree {
   private container: HTMLDivElement | null = null;
   private isVisible: boolean = false;
   private chart: any = null; // Chart instance from family-chart
-  private selectedSquibble: Squibble | null = null;
-  private onSquibbleSelect: ((squibble: Squibble) => void) | null = null;
-  private allSquibbles: Squibble[] = [];
-  private squibbleMap: Map<number, Squibble> = new Map(); // Map ID to Squibble
+  private selectedCreature: Creature | null = null;
+  private onCreatureSelect: ((creature: Creature) => void) | null = null;
+  private allCreatures: Creature[] = [];
+  private creatureMap: Map<number, Creature> = new Map(); // Map ID to Creature
 
   /**
-   * Show the family tree for a selected squibble
+   * Show the family tree for a selected creature (Squibble or Gnawlin)
    */
   show(
-    selectedSquibble: Squibble,
+    selectedCreature: Creature,
     allSquibbles: Squibble[],
-    onSquibbleSelect: (squibble: Squibble) => void
+    allGnawlins: Gnawlin[],
+    onCreatureSelect: (creature: Creature) => void
   ): void {
     if (this.isVisible) {
       this.hide();
     }
 
-    this.selectedSquibble = selectedSquibble;
-    this.allSquibbles = allSquibbles;
-    this.onSquibbleSelect = onSquibbleSelect;
+    this.selectedCreature = selectedCreature;
+    // Combine all creatures
+    this.allCreatures = [...allSquibbles, ...allGnawlins];
+    this.onCreatureSelect = onCreatureSelect;
     this.isVisible = true;
     this.createOverlay();
     this.renderTree();
@@ -162,32 +168,32 @@ export class FamilyTree {
    * Generate family tree data and render
    */
   private renderTree(): void {
-    if (!this.container || !this.selectedSquibble) return;
+    if (!this.container || !this.selectedCreature) return;
 
     const chartContainer = document.getElementById('family-tree-chart');
     if (!chartContainer) return;
 
-    // Ensure the selected squibble is in allSquibbles for child lookup
-    if (!this.allSquibbles.find(s => s.id === this.selectedSquibble!.id)) {
-      this.allSquibbles.push(this.selectedSquibble);
+    // Ensure the selected creature is in allCreatures for child lookup
+    if (!this.allCreatures.find(c => c.id === this.selectedCreature!.id)) {
+      this.allCreatures.push(this.selectedCreature);
     }
 
     // Build family tree data
-    const data = this.buildFamilyTreeData(this.selectedSquibble);
+    const data = this.buildFamilyTreeData(this.selectedCreature);
     
-    console.log('Family tree debug:', {
-      rootId: this.selectedSquibble.id,
-      allSquibblesCount: this.allSquibbles.length,
-      dataLength: data.length,
-      hasParents: this.selectedSquibble.parent1Id !== null || this.selectedSquibble.parent2Id !== null,
-      childrenCount: this.allSquibbles.filter(s => s.parent1Id === this.selectedSquibble!.id || s.parent2Id === this.selectedSquibble!.id).length
-    });
+                console.log('Family tree debug:', {
+                  rootId: this.selectedCreature.id,
+                  allCreaturesCount: this.allCreatures.length,
+                  dataLength: data.length,
+                  hasParents: this.selectedCreature.parent1Id !== null || this.selectedCreature.parent2Id !== null,
+                  childrenCount: this.allCreatures.filter(c => c.parent1Id === this.selectedCreature!.id || c.parent2Id === this.selectedCreature!.id).length
+                });
     
     if (data.length === 0) {
       chartContainer.innerHTML = `
-        <div style="display: flex; align-items: center; justify-content: center; height: 100%; color: #999;">
-          <p>No family tree data available (this squibble has no known ancestors or descendants).</p>
-        </div>
+                    <div style="display: flex; align-items: center; justify-content: center; height: 100%; color: #999;">
+                      <p>No family tree data available (this creature has no known ancestors or descendants).</p>
+                    </div>
       `;
       return;
     }
@@ -204,9 +210,9 @@ export class FamilyTree {
       console.log('Chart created:', this.chart);
       console.log('Chart container after creation:', chartContainer.innerHTML.substring(0, 200));
       
-      // Set the main person (root squibble) - center the tree on this squibble
-      this.chart.updateMainId(this.selectedSquibble.id.toString());
-      console.log('Main ID set to:', this.selectedSquibble.id.toString());
+      // Set the main person (root creature) - center the tree on this creature
+      this.chart.updateMainId(this.selectedCreature.id.toString());
+      console.log('Main ID set to:', this.selectedCreature.id.toString());
       
       // Set up HTML card with custom rendering
       const cardHtml = this.chart.setCardHtml();
@@ -233,13 +239,13 @@ export class FamilyTree {
           return '';
         }
         
-        const squibbleId = typeof id === 'string' ? parseInt(id) : id;
-        const squibble = this.squibbleMap.get(squibbleId);
-        if (!squibble) {
-          console.warn('Squibble not found for ID:', squibbleId, 'Available IDs:', Array.from(this.squibbleMap.keys()));
+        const creatureId = typeof id === 'string' ? parseInt(id) : id;
+        const creature = this.creatureMap.get(creatureId);
+        if (!creature) {
+          console.warn('Creature not found for ID:', creatureId, 'Available IDs:', Array.from(this.creatureMap.keys()));
           return '';
         }
-        return this.renderCard(squibble, d);
+        return this.renderCard(creature, d);
       });
       
       // Set click handler - clicking on a portrait shows their stats in a popup
@@ -251,10 +257,10 @@ export class FamilyTree {
           return;
         }
         
-        const squibbleId = typeof id === 'string' ? parseInt(id) : id;
-        const squibble = this.squibbleMap.get(squibbleId);
-        if (squibble) {
-          this.showStatsPopup(squibble);
+        const creatureId = typeof id === 'string' ? parseInt(id) : id;
+        const creature = this.creatureMap.get(creatureId);
+        if (creature) {
+          this.showStatsPopup(creature);
         }
       });
       
@@ -268,7 +274,7 @@ export class FamilyTree {
         spousesIds: d.rels.spouses
       })));
       
-      // Update the tree (center on the root squibble)
+      // Update the tree (center on the root creature)
       console.log('Updating tree...');
       this.chart.updateTree({ 
         initial: true,
@@ -355,73 +361,87 @@ export class FamilyTree {
    * Build family tree data structure in family-chart format
    * Uses IDs to track parent/child relationships
    */
-  private buildFamilyTreeData(rootSquibble: Squibble): Data {
+  private buildFamilyTreeData(rootCreature: Creature): Data {
     const data: Data = [];
-    const visited = new Set<number>(); // Track visited squibble IDs
-    this.squibbleMap.clear();
-    
-    // Create a map of all squibbles by ID for quick lookup
-    // Always include the root squibble, even if it's not in allSquibbles
-    const squibbleById = new Map<number, Squibble>();
-    squibbleById.set(rootSquibble.id, rootSquibble); // Ensure root is always included
-    for (const squibble of this.allSquibbles) {
-      squibbleById.set(squibble.id, squibble);
+    const visited = new Set<number>(); // Track visited creature IDs
+    this.creatureMap.clear();
+
+    // Create a map of all creatures by ID for quick lookup
+    // Always include the root creature, even if it's not in allCreatures
+    const creatureById = new Map<number, Creature>();
+    creatureById.set(rootCreature.id, rootCreature); // Ensure root is always included
+    for (const creature of this.allCreatures) {
+      creatureById.set(creature.id, creature);
     }
 
-    // Recursive function to add squibble and ancestors (using IDs)
-    const addSquibble = (squibbleId: number, depth: number = 0): string | null => {
+    // Recursive function to add creature and ancestors (using IDs)
+    const addCreature = (creatureId: number, depth: number = 0): string | null => {
       if (depth > 5) return null; // Limit depth to prevent infinite recursion
-      if (visited.has(squibbleId)) return squibbleId.toString();
-      
-      const squibble = squibbleById.get(squibbleId);
-      if (!squibble) return null; // Squibble not found (may have been removed)
+      if (visited.has(creatureId)) return creatureId.toString();
 
-      visited.add(squibbleId);
-      this.squibbleMap.set(squibbleId, squibble);
+      const creature = creatureById.get(creatureId);
+      if (!creature) return null; // Creature not found (may have been removed)
 
-      const nodeId = squibbleId.toString();
+      visited.add(creatureId);
+      this.creatureMap.set(creatureId, creature);
+
+      const nodeId = creatureId.toString();
       const parents: string[] = [];
       const children: string[] = [];
       const spouses: string[] = [];
 
-      // Add parents using IDs
-      if (squibble.parent1Id !== null) {
-        const parentId = addSquibble(squibble.parent1Id, depth + 1);
-        if (parentId) {
-          parents.push(parentId);
+      // Add parents using IDs (only same species)
+      const isGnawlin = creature instanceof Gnawlin;
+      if (creature.parent1Id !== null) {
+        const parent = creatureById.get(creature.parent1Id);
+        // Only add parent if it's the same species
+        if (parent && (parent instanceof Gnawlin) === isGnawlin) {
+          const parentId = addCreature(creature.parent1Id, depth + 1);
+          if (parentId) {
+            parents.push(parentId);
+          }
         }
       }
-      if (squibble.parent2Id !== null) {
-        const parentId = addSquibble(squibble.parent2Id, depth + 1);
-        if (parentId && !parents.includes(parentId)) {
-          parents.push(parentId);
+      if (creature.parent2Id !== null) {
+        const parent = creatureById.get(creature.parent2Id);
+        // Only add parent if it's the same species
+        if (parent && (parent instanceof Gnawlin) === isGnawlin) {
+          const parentId = addCreature(creature.parent2Id, depth + 1);
+          if (parentId && !parents.includes(parentId)) {
+            parents.push(parentId);
+          }
         }
       }
 
-      // Add mates to spouses array (for relationship lines)
+      // Add mates to spouses array (only same species)
       // Note: Reciprocal relationships will be added when the mate's node is processed
-      for (const mateId of squibble.mateIds) {
-        const mate = squibbleById.get(mateId);
-        if (mate) {
-          const mateNodeId = addSquibble(mateId, depth);
+      for (const mateId of creature.mateIds) {
+        const mate = creatureById.get(mateId);
+        // Only add mate if it's the same species
+        if (mate && (mate instanceof Gnawlin) === isGnawlin) {
+          const mateNodeId = addCreature(mateId, depth);
           if (mateNodeId && !spouses.includes(mateNodeId)) {
             spouses.push(mateNodeId);
           }
         }
       }
 
-      // Generate portrait URL for this squibble
-      const portraitUrl = this.generatePortraitUrl(squibble);
+      // Generate portrait URL for this creature
+      const portraitUrl = this.generatePortraitUrl(creature);
+      
+      // Determine creature type and name
+      const creatureType = creature instanceof Gnawlin ? 'Gnawlin' : 'Squibble';
+      const creatureName = `${creatureType} #${creature.id}`;
       
       // Create datum
       const datum: Datum = {
         id: nodeId,
         data: {
-          gender: squibble.gender === 'male' ? 'M' : 'F',
-          name: `Squibble #${squibble.id}`,
-          isDead: !squibble.alive,
+          gender: creature.gender === 'male' ? 'M' : 'F',
+          name: creatureName,
+          isDead: !creature.alive,
           portrait: portraitUrl, // Add portrait URL to data
-          squibble: squibble, // Store reference for click handler
+          creature: creature, // Store reference for click handler
         },
         rels: {
           parents,
@@ -435,20 +455,26 @@ export class FamilyTree {
     };
 
     // Start from root
-    addSquibble(rootSquibble.id);
+    addCreature(rootCreature.id);
 
     // Add descendants (children) using IDs and update parent-child relationships
-    const addChildren = (squibbleId: number) => {
-      const squibble = squibbleById.get(squibbleId);
-      if (!squibble) return;
+    // Only track children of the same species
+    const addChildren = (creatureId: number) => {
+      const creature = creatureById.get(creatureId);
+      if (!creature) return;
       
-      for (const other of this.allSquibbles) {
-        // Check if this squibble is a parent of 'other' using IDs
-        if ((other.parent1Id === squibbleId || other.parent2Id === squibbleId) && !visited.has(other.id)) {
-          const childId = addSquibble(other.id);
+      const isGnawlin = creature instanceof Gnawlin;
+      
+      for (const other of this.allCreatures) {
+        // Check if this creature is a parent of 'other' using IDs
+        // Only if they're the same species
+        if ((other.parent1Id === creatureId || other.parent2Id === creatureId) && 
+            !visited.has(other.id) &&
+            (other instanceof Gnawlin) === isGnawlin) {
+          const childId = addCreature(other.id);
           if (childId) {
             // Find parent's datum and add child
-            const parentDatum = data.find(d => d.id === squibbleId.toString());
+            const parentDatum = data.find(d => d.id === creatureId.toString());
             if (parentDatum && !parentDatum.rels.children.includes(childId)) {
               parentDatum.rels.children.push(childId);
             }
@@ -458,27 +484,32 @@ export class FamilyTree {
       }
     };
 
-    addChildren(rootSquibble.id);
+    addChildren(rootCreature.id);
 
-    // Add siblings - squibbles that share the same parents
+    // Add siblings - creatures that share the same parents (only same species)
     // This needs to happen after all nodes are added
     for (const datum of data) {
-      const squibbleId = parseInt(datum.id);
-      const squibble = squibbleById.get(squibbleId);
-      if (!squibble) continue;
+      const creatureId = parseInt(datum.id);
+      const creature = creatureById.get(creatureId);
+      if (!creature) continue;
+
+      // Only add siblings if this creature has parents
+      if (creature.parent1Id === null && creature.parent2Id === null) continue;
       
-      // Only add siblings if this squibble has parents
-      if (squibble.parent1Id === null && squibble.parent2Id === null) continue;
+      const isGnawlin = creature instanceof Gnawlin;
       
-      for (const other of this.allSquibbles) {
+      for (const other of this.allCreatures) {
         // Skip self
-        if (other.id === squibbleId) continue;
+        if (other.id === creatureId) continue;
         
+        // Only consider same species
+        if ((other instanceof Gnawlin) !== isGnawlin) continue;
+
         // Check if they share at least one parent (siblings)
-        const shareParent = 
-          (squibble.parent1Id !== null && (other.parent1Id === squibble.parent1Id || other.parent2Id === squibble.parent1Id)) ||
-          (squibble.parent2Id !== null && (other.parent1Id === squibble.parent2Id || other.parent2Id === squibble.parent2Id));
-        
+        const shareParent =
+          (creature.parent1Id !== null && (other.parent1Id === creature.parent1Id || other.parent2Id === creature.parent1Id)) ||
+          (creature.parent2Id !== null && (other.parent1Id === creature.parent2Id || other.parent2Id === creature.parent2Id));
+
         if (shareParent) {
           const siblingId = other.id.toString();
           // Check if sibling is already in the tree
@@ -512,34 +543,42 @@ export class FamilyTree {
   }
 
   /**
-   * Generate a portrait URL (data URL) for a squibble
-   * Creates a simple colored circle matching the in-game sprite style
+   * Generate a portrait URL (data URL) for a creature
+   * Creates a simple colored circle for Squibbles, square for Gnawlins
    */
-  private generatePortraitUrl(squibble: Squibble): string {
-    const color = squibble.color;
+  private generatePortraitUrl(creature: Creature): string {
+    const color = creature.color;
     const rgb = `rgb(${color[0]}, ${color[1]}, ${color[2]})`;
-    const isDead = !squibble.alive;
+    const isDead = !creature.alive;
     const opacity = isDead ? 0.5 : 1.0;
+    const isGnawlin = creature instanceof Gnawlin;
 
-    // Generate portrait as a simple colored circle (matching in-game sprite style)
+    // Generate portrait
     const canvas = document.createElement('canvas');
     canvas.width = 80;
     canvas.height = 80;
     const ctx = canvas.getContext('2d');
     if (ctx) {
-      // Draw circle using squibble's color (same as in-game: drawCircle with squibble.color)
       ctx.fillStyle = rgb;
       ctx.globalAlpha = opacity;
-      ctx.beginPath();
-      ctx.arc(40, 40, 35, 0, Math.PI * 2);
-      ctx.fill();
+      
+      if (isGnawlin) {
+        // Draw square for Gnawlins
+        const size = 50;
+        ctx.fillRect(40 - size/2, 40 - size/2, size, size);
+      } else {
+        // Draw circle for Squibbles
+        ctx.beginPath();
+        ctx.arc(40, 40, 35, 0, Math.PI * 2);
+        ctx.fill();
+      }
       
       // Add ID text in the center (white text for visibility)
       ctx.fillStyle = 'white';
       ctx.font = 'bold 14px monospace';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(`#${squibble.id}`, 40, 40);
+      ctx.fillText(`#${creature.id}`, 40, 40);
     }
 
     return canvas.toDataURL();
@@ -548,15 +587,17 @@ export class FamilyTree {
   /**
    * Render a card with portrait and ID
    * This function is called by family-chart to create the inner HTML for each card
-   * Renders a simple colored circle matching the in-game sprite style
+   * Renders a simple colored circle for Squibbles, square for Gnawlins
    * (Eventually this will be updated when visual traits are implemented)
    */
-  private renderCard(squibble: Squibble, datum: any): string {
-    const stats = squibble.getStats();
-    const isDead = !squibble.alive;
+  private renderCard(creature: Creature, datum: any): string {
+    const stats = creature.getStats();
+    const isDead = !creature.alive;
+    const isGnawlin = creature instanceof Gnawlin;
+    const creatureType = isGnawlin ? 'Gnawlin' : 'Squibble';
     
     // Get portrait URL from datum data (already generated)
-    const portraitUrl = datum.data?.portrait || this.generatePortraitUrl(squibble);
+    const portraitUrl = datum.data?.portrait || this.generatePortraitUrl(creature);
     const grayscale = isDead ? 'filter: grayscale(100%);' : '';
 
     // Return HTML that will be inserted into the card
@@ -579,7 +620,7 @@ export class FamilyTree {
         ${grayscale}
       " onmouseover="this.style.transform='scale(1.05)'; this.style.boxShadow='0 4px 8px rgba(0,0,0,0.5)';" 
          onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='0 2px 4px rgba(0,0,0,0.3)';">
-        <img src="${portraitUrl}" alt="Squibble #${squibble.id}" style="
+        <img src="${portraitUrl}" alt="${creatureType} #${creature.id}" style="
           width: 80px;
           height: 80px;
           border-radius: 50%;
@@ -597,7 +638,7 @@ export class FamilyTree {
           font-family: '${FontLoader.getFontFamily()}', monospace;
           margin-bottom: 2px;
         ">
-          ID: ${squibble.id}
+          ${creatureType} #${creature.id}
         </div>
         <div style="
           font-size: 9px;
@@ -614,16 +655,18 @@ export class FamilyTree {
   /**
    * Show a popup window with squibble stats
    */
-  private showStatsPopup(squibble: Squibble): void {
+  private showStatsPopup(creature: Creature): void {
     // Remove existing popup if any
-    const existingPopup = document.getElementById('squibble-stats-popup');
+    const existingPopup = document.getElementById('creature-stats-popup');
     if (existingPopup) {
       existingPopup.remove();
     }
 
-    const stats = squibble.getStats();
+    const stats = creature.getStats();
+    const isGnawlin = creature instanceof Gnawlin;
+    const creatureType = isGnawlin ? 'Gnawlin' : 'Squibble';
     const popup = document.createElement('div');
-    popup.id = 'squibble-stats-popup';
+    popup.id = 'creature-stats-popup';
     popup.style.cssText = `
       position: fixed;
       top: 50%;
@@ -654,7 +697,7 @@ export class FamilyTree {
     `;
     
     const title = document.createElement('h3');
-    title.textContent = `Squibble #${squibble.id}`;
+    title.textContent = `${creatureType} #${creature.id}`;
     title.style.cssText = 'margin: 0; color: #ecf0f1;';
     header.appendChild(title);
 
@@ -674,7 +717,7 @@ export class FamilyTree {
     `;
     closeBtn.onclick = () => {
       popup.remove();
-      const backdrop = document.getElementById('squibble-stats-backdrop');
+      const backdrop = document.getElementById('creature-stats-backdrop');
       if (backdrop) backdrop.remove();
     };
     header.appendChild(closeBtn);
@@ -711,8 +754,10 @@ export class FamilyTree {
 
     // Breeding
     content.innerHTML += `<div style="margin-bottom: 15px;"><strong style="color: #3498db;">Breeding:</strong><br>`;
-    content.innerHTML += `Attractiveness: ${stats.attractiveness.toFixed(2)}<br>`;
-    content.innerHTML += `Min Attractiveness: ${stats.min_attractiveness.toFixed(2)}<br>`;
+    if (!isGnawlin && 'attractiveness' in stats) {
+      content.innerHTML += `Attractiveness: ${(stats as any).attractiveness.toFixed(2)}<br>`;
+      content.innerHTML += `Min Attractiveness: ${(stats as any).min_attractiveness.toFixed(2)}<br>`;
+    }
     content.innerHTML += `Virility: ${stats.virility.toFixed(2)}<br>`;
     content.innerHTML += `Cooldown: ${stats.breeding_cooldown > 0 ? `${stats.breeding_cooldown.toFixed(1)}s` : 'Ready'}<br>`;
     content.innerHTML += `Pregnant: ${stats.is_pregnant ? 'Yes' : 'No'}<br>`;
@@ -746,7 +791,7 @@ export class FamilyTree {
 
     // Backdrop
     const backdrop = document.createElement('div');
-    backdrop.id = 'squibble-stats-backdrop';
+    backdrop.id = 'creature-stats-backdrop';
     backdrop.style.cssText = `
       position: fixed;
       top: 0;
@@ -765,7 +810,7 @@ export class FamilyTree {
 
     // Close on ESC key
     const escHandler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && document.getElementById('squibble-stats-popup')) {
+      if (e.key === 'Escape' && document.getElementById('creature-stats-popup')) {
         popup.remove();
         backdrop.remove();
         window.removeEventListener('keydown', escHandler);

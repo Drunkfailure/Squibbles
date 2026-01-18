@@ -282,6 +282,20 @@ export const POLYGENIC_TRAITS: Record<string, PolygenicTrait> = {
     baseValue: 100.0,
     outputRange: [50, 200], // HP range: 50-200 HP
   },
+  accuracy: {
+    name: 'Accuracy',
+    lociCount: 4,
+    lociRange: [-0.1, 0.1],
+    baseValue: 0.7,
+    outputRange: [0.3, 1.0], // 30% to 100% accuracy
+  },
+  awareness: {
+    name: 'Awareness',
+    lociCount: 5,
+    lociRange: [-0.08, 0.08],
+    baseValue: 0.5,
+    outputRange: [0, 1], // 0 = never notices predators, 1 = always notices and avoids
+  },
 };
 
 /**
@@ -391,8 +405,10 @@ export interface Genome {
     damageResistance: PolygenicGenotype;
     aggressiveness: PolygenicGenotype;
     damage: PolygenicGenotype;
-    maxHealth: PolygenicGenotype;
-  };
+      maxHealth: PolygenicGenotype;
+      accuracy: PolygenicGenotype;
+      awareness: PolygenicGenotype; // Squibbles only
+    };
   
   // Multi-allele traits (discrete visual characteristics)
   multiAllele: {
@@ -446,6 +462,8 @@ export function generateRandomGenome(): Genome {
       aggressiveness: randomPolygenicGenotype(POLYGENIC_TRAITS.aggressiveness),
       damage: randomPolygenicGenotype(POLYGENIC_TRAITS.damage),
       maxHealth: randomPolygenicGenotype(POLYGENIC_TRAITS.maxHealth),
+      accuracy: randomPolygenicGenotype(POLYGENIC_TRAITS.accuracy),
+      awareness: randomPolygenicGenotype(POLYGENIC_TRAITS.awareness), // Squibbles only
     },
     multiAllele: {
       hornStyle: randomMultiAlleleGenotype(MULTI_ALLELE_TRAITS.hornStyle),
@@ -490,6 +508,8 @@ export function inheritGenome(
       aggressiveness: inheritPolygenic(parent1.polygenic.aggressiveness, parent2.polygenic.aggressiveness, POLYGENIC_TRAITS.aggressiveness, mutationConfig),
       damage: inheritPolygenic(parent1.polygenic.damage, parent2.polygenic.damage, POLYGENIC_TRAITS.damage, mutationConfig),
       maxHealth: inheritPolygenic(parent1.polygenic.maxHealth, parent2.polygenic.maxHealth, POLYGENIC_TRAITS.maxHealth, mutationConfig),
+      accuracy: inheritPolygenic(parent1.polygenic.accuracy, parent2.polygenic.accuracy, POLYGENIC_TRAITS.accuracy, mutationConfig),
+      awareness: inheritPolygenic(parent1.polygenic.awareness, parent2.polygenic.awareness, POLYGENIC_TRAITS.awareness, mutationConfig), // Squibbles only
     },
     multiAllele: {
       hornStyle: inheritMultiAllele(parent1.multiAllele.hornStyle, parent2.multiAllele.hornStyle, MULTI_ALLELE_TRAITS.hornStyle, mutationConfig),
@@ -529,6 +549,8 @@ export interface ExpressedPhenotypes {
   aggressiveness: number;
   damage: number;
   maxHealth: number;
+  accuracy: number;
+  awareness: number; // Squibbles only
   
   // Visual traits (strings)
   hornStyle: string;
@@ -564,6 +586,8 @@ export function expressGenome(genome: Genome): ExpressedPhenotypes {
     aggressiveness: getPolygenicPhenotype(POLYGENIC_TRAITS.aggressiveness, genome.polygenic.aggressiveness),
     damage: getPolygenicPhenotype(POLYGENIC_TRAITS.damage, genome.polygenic.damage),
     maxHealth: getPolygenicPhenotype(POLYGENIC_TRAITS.maxHealth, genome.polygenic.maxHealth),
+    accuracy: getPolygenicPhenotype(POLYGENIC_TRAITS.accuracy, genome.polygenic.accuracy),
+    awareness: getPolygenicPhenotype(POLYGENIC_TRAITS.awareness, genome.polygenic.awareness), // Squibbles only
     
     hornStyle: getMultiAllelePhenotype(MULTI_ALLELE_TRAITS.hornStyle, genome.multiAllele.hornStyle),
     eyeType: getMultiAllelePhenotype(MULTI_ALLELE_TRAITS.eyeType, genome.multiAllele.eyeType),

@@ -6,6 +6,7 @@ import { Container, Graphics, Text, TextStyle } from 'pixi.js';
 import { Stats } from '../utils/types';
 import { FoodStats } from '../food/FoodManager';
 import { FontLoader } from '../utils/FontLoader';
+import { Gnawlin } from '../creatures/Gnawlin';
 
 export class SimulationUI {
   private container: Container;
@@ -43,7 +44,7 @@ export class SimulationUI {
     return this.container;
   }
   
-  drawStatsPanel(stats: Stats, foodStats: FoodStats, zoomLevel: number): void {
+  drawStatsPanel(stats: Stats, foodStats: FoodStats, zoomLevel: number, gnawlinStats?: Stats): void {
     // Remove old panel and text
     if (this.statsPanel) {
       this.container.removeChild(this.statsPanel);
@@ -76,7 +77,8 @@ export class SimulationUI {
     
     // Ensure all values are properly converted to strings
     const lines: string[] = [
-      `Squibbles: ${stats.alive || 0}/${stats.count || 0}`,
+      `Squibbles: ${stats.alive || 0}`,
+      gnawlinStats ? `Gnawlins: ${gnawlinStats.alive || 0}` : '',
       `Avg Hunger: ${(stats.avg_hunger ?? 0).toFixed(1)}`,
       `Avg Thirst: ${(stats.avg_thirst ?? 0).toFixed(1)}`,
       `Avg Health: ${(stats.avg_health ?? 0).toFixed(1)}`,
@@ -86,7 +88,7 @@ export class SimulationUI {
       `Respawning: ${foodStats.respawning_soon || 0}`,
       `Seeking Food: ${stats.seeking_food_count || 0}`,
       `Zoom: ${zoomLevel.toFixed(1)}x`,
-    ];
+    ].filter(line => line !== ''); // Remove empty lines
     
     if (this.showControls) {
       lines.push(
@@ -130,7 +132,7 @@ export class SimulationUI {
     }
   }
   
-  drawSquibbleDetails(squibble: any): void {
+  drawSquibbleDetails(creature: any): void {
     // Remove old detail panel
     if (this.squibbleDetailPanel) {
       this.container.removeChild(this.squibbleDetailPanel);
@@ -173,9 +175,9 @@ export class SimulationUI {
       this.familyTreeButtonText = null;
     }
     
-    if (!squibble) {
+    if (!creature) {
       this.lastSelectedSquibbleId = null;
-      // Clear panel bounds when no squibble is selected
+      // Clear panel bounds when no creature is selected
       this.panelX = 0;
       this.panelY = 0;
       this.panelWidth = 0;
@@ -183,8 +185,12 @@ export class SimulationUI {
       return;
     }
     
-    // Reset to page 1 if a different squibble is selected
-    const stats = squibble.getStats();
+    // Determine creature type
+    const isGnawlin = creature instanceof Gnawlin;
+    const creatureType = isGnawlin ? 'Gnawlin' : 'Squibble';
+    
+    // Reset to page 1 if a different creature is selected
+    const stats = creature.getStats();
     if (this.lastSelectedSquibbleId !== stats.id) {
       this.currentPage = 1;
       this.lastSelectedSquibbleId = stats.id;
@@ -231,7 +237,7 @@ export class SimulationUI {
     
     // Page 1: Basic Info, Health, Traits, Breeding
     const page1Lines: string[] = [
-      '=== Selected Squibble ===',
+      `=== Selected ${creatureType} ===`,
       `Page ${this.currentPage}/2`,
       '',
       `ID: ${stats.id || 'N/A'}`,
@@ -252,18 +258,29 @@ export class SimulationUI {
       `  Damage Resistance: ${((stats.damage_resistance ?? 0) * 100).toFixed(1)}%`,
       `  Aggressiveness: ${((stats.aggressiveness ?? 0.5) * 100).toFixed(1)}%`,
       `  Damage: ${(stats.damage ?? 5).toFixed(1)}`,
+      `  Accuracy: ${((stats.accuracy ?? 0.7) * 100).toFixed(1)}%`,
+      `  Awareness: ${((stats.awareness ?? 0.5) * 100).toFixed(1)}%`,
       `  Wet: ${(stats.wet_timer ?? 0) > 0 ? (stats.wet_timer ?? 0).toFixed(1) + 's' : 'No'}`,
       '',
       'Breeding:',
-      `  Attractiveness: ${(stats.attractiveness * 100).toFixed(1)}%`,
-      `  Min Attractiveness: ${(stats.min_attractiveness * 100).toFixed(1)}%`,
-      `  Virility: ${(stats.virility * 100).toFixed(1)}%`,
-      `  Size: ${(stats.size * 100).toFixed(0)}%`,
     ];
+    
+    // Add attractiveness stats only for Squibbles
+    if (!isGnawlin && 'attractiveness' in stats && 'min_attractiveness' in stats) {
+      page1Lines.push(
+        `  Attractiveness: ${((stats as any).attractiveness * 100).toFixed(1)}%`,
+        `  Min Attractiveness: ${((stats as any).min_attractiveness * 100).toFixed(1)}%`
+      );
+    }
+    
+    page1Lines.push(
+      `  Virility: ${(stats.virility * 100).toFixed(1)}%`,
+      `  Size: ${(stats.size * 100).toFixed(0)}%`
+    );
     
     // Page 2: Reproduction, Breeding Status, Status, Appearance
     const page2Lines: string[] = [
-      '=== Selected Squibble ===',
+      `=== Selected ${creatureType} ===`,
       `Page ${this.currentPage}/2`,
       '',
       'Reproduction:',
@@ -313,10 +330,10 @@ export class SimulationUI {
       .endFill();
     this.page1Button.interactive = true;
     this.page1Button.buttonMode = true;
-    this.page1Button.on('pointerdown', () => {
-      this.currentPage = 1;
-      this.drawSquibbleDetails(squibble);
-    });
+                this.page1Button.on('pointerdown', () => {
+                  this.currentPage = 1;
+                  this.drawSquibbleDetails(creature);
+                });
     this.container.addChild(this.page1Button);
     
     this.page1ButtonText = new Text('Page 1', buttonStyle);
@@ -333,10 +350,10 @@ export class SimulationUI {
       .endFill();
     this.page2Button.interactive = true;
     this.page2Button.buttonMode = true;
-    this.page2Button.on('pointerdown', () => {
-      this.currentPage = 2;
-      this.drawSquibbleDetails(squibble);
-    });
+                this.page2Button.on('pointerdown', () => {
+                  this.currentPage = 2;
+                  this.drawSquibbleDetails(creature);
+                });
     this.container.addChild(this.page2Button);
     
     this.page2ButtonText = new Text('Page 2', buttonStyle);

@@ -11,6 +11,7 @@ export interface GameSettings {
   screenWidth: number;
   screenHeight: number;
   creatureCount: number;
+  gnawlinCount: number;
   terrain?: {
     biome_scale: number;
     biome_weights: {

@@ -7,6 +7,7 @@ import { Food } from '../food/Food';
 import { FoodManager } from '../food/FoodManager';
 import { WaterMap } from '../terrain/WaterMap';
 import { Biome } from '../terrain/Biome';
+import { Gnawlin } from './Gnawlin';
 import {
   Genome,
   ExpressedPhenotypes,
@@ -66,6 +67,19 @@ export class Squibble {
   
   // Damage (1-15): Combat damage/ability (for future combat system)
   public damage: number;
+  
+  // Accuracy (0.3-1.0): Chance to hit in combat
+  public accuracy: number;
+  
+  // Awareness (0-1): Likelihood of noticing and avoiding predators when in vision
+  public awareness: number;
+  
+  // Combat state
+  public isInCombat: boolean = false;
+  public combatTarget: any = null; // Squibble or Gnawlin that this is fighting
+  public combatTurn: boolean = false; // True if it's this creature's turn to attack
+  public combatTimer: number = 0; // Time until next turn (turn-based combat)
+  private combatTurnDuration: number = 1.0; // 1 second per turn
   
   // Wet: after leaving water, slow for 30 seconds
   public wetTimer: number = 0;
@@ -179,6 +193,8 @@ export class Squibble {
     this.aggressiveness = phenotypes.aggressiveness;
     this.damage = phenotypes.damage;
     this.maxHealth = phenotypes.maxHealth;
+    this.accuracy = phenotypes.accuracy;
+    this.awareness = phenotypes.awareness;
     
     // Set initial hunger/thirst to capacity
     this.hunger = this.hungerCapacity;
@@ -231,7 +247,8 @@ export class Squibble {
     foodManager?: FoodManager,
     waterMap?: WaterMap,
     squibbleManager?: any, // SquibbleManager for finding mates
-    getBiomeAt?: (x: number, y: number) => number
+    getBiomeAt?: (x: number, y: number) => number,
+    gnawlinManager?: any // GnawlinManager for predator detection
   ): void {
     if (!this.alive) {
       return;
@@ -257,6 +274,85 @@ export class Squibble {
     // Update breeding cooldown
     if (this.breedingCooldown > 0) {
       this.breedingCooldown = Math.max(0, this.breedingCooldown - dt);
+    }
+    
+    // Update combat timer
+    if (this.isInCombat) {
+      this.combatTimer -= dt;
+      if (this.combatTimer <= 0) {
+        this.combatTurn = true;
+        this.combatTimer = this.combatTurnDuration;
+      }
+    }
+    
+    // Handle combat
+    if (this.isInCombat && this.combatTarget) {
+      // Check if target is still alive and in range
+      if (!this.combatTarget.alive) {
+        // Target died, end combat
+        this.endCombat();
+      } else {
+        const dx = this.combatTarget.x - this.x;
+        const dy = this.combatTarget.y - this.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        
+        // If target moved too far, end combat
+        if (distance > this.effectiveVision * 1.5) {
+          this.endCombat();
+        } else {
+          // Face the target
+          this.direction = Math.atan2(dy, dx);
+          
+          // Maintain minimum combat distance to prevent overlap
+          const minCombatDistance = this.radius + (this.combatTarget instanceof Squibble ? this.combatTarget.radius : this.combatTarget.currentSize / 2) + 5;
+          if (distance < minCombatDistance && distance > 0) {
+            // Push apart to maintain combat distance
+            const pushDistance = (minCombatDistance - distance) * 0.5;
+            const pushX = (dx / distance) * pushDistance;
+            const pushY = (dy / distance) * pushDistance;
+            this.x -= pushX;
+            this.y -= pushY;
+          }
+          
+          // If it's this squibble's turn, attack
+          if (this.combatTurn) {
+            this.performAttack(this.combatTarget);
+            this.combatTurn = false;
+          }
+        }
+      }
+    } else {
+      // Not in combat - check for predators (Gnawlins) using awareness
+      if (gnawlinManager) {
+        const nearestGnawlin = this.findNearestGnawlin(gnawlinManager);
+        if (nearestGnawlin && nearestGnawlin.alive) {
+          const dx = nearestGnawlin.x - this.x;
+          const dy = nearestGnawlin.y - this.y;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+
+          if (distance <= this.effectiveVision) { // Gnawlin in sight
+            // Calculate effective awareness (pregnant squibbles get a boost)
+            const pregnancyAwarenessBoost = this.isPregnant ? 0.3 : 0; // +30% awareness when pregnant
+            const effectiveAwareness = Math.min(1.0, this.awareness + pregnancyAwarenessBoost);
+            
+            // Check if squibble notices the predator (based on awareness)
+            const noticesPredator = Math.random() < effectiveAwareness;
+            
+            if (noticesPredator) {
+              // Noticed the predator - decide whether to flee or stand ground based on aggressiveness
+              // Low aggressiveness = flee, High aggressiveness = stand ground and continue normal behavior
+              if (Math.random() < this.aggressiveness) {
+                // Stand ground - continue doing what they're doing (don't flee, but also don't attack)
+                // Squibbles never initiate combat with Gnawlins
+              } else {
+                // Flee from the predator
+                this.fleeFrom(nearestGnawlin);
+              }
+            }
+            // If not noticed, squibble continues normal behavior (unaware of danger)
+          }
+        }
+      }
     }
     
     // Update breeding progress
@@ -364,6 +460,13 @@ export class Squibble {
             // (even if we only needed one, getting both is fine)
             this.hunger = Math.min(this.hungerCapacity, this.hunger + result.hungerGain);
             this.thirst = Math.min(this.thirstCapacity, this.thirst + result.thirstGain);
+            
+            // Restore health for all foods except cactus
+            if (result.species && result.species !== 'cactus') {
+              // Restore health based on hunger gain (proportional to food value)
+              const healthGain = Math.min(5, result.hungerGain * 0.2); // Up to 5 HP, or 20% of hunger gain
+              this.health = Math.min(this.maxHealth, this.health + healthGain);
+            }
             
             // Cactus can prick: intelligence reduces harm chance. Cactus does not restore health.
             // Damage resistance reduces actual damage taken
@@ -609,8 +712,11 @@ export class Squibble {
         }
       }
       
-      this.x += Math.cos(this.direction) * effectiveSpeed;
-      this.y += Math.sin(this.direction) * effectiveSpeed;
+      // Only move if not in combat (combat handles positioning separately)
+      if (!this.isInCombat) {
+        this.x += Math.cos(this.direction) * effectiveSpeed;
+        this.y += Math.sin(this.direction) * effectiveSpeed;
+      }
       
       // Just left water: apply wet for 30 seconds and clear crossing target
       const inWaterAfter = waterMap?.isWaterAt(this.x, this.y) ?? false;
@@ -731,6 +837,8 @@ export class Squibble {
       damage_resistance: this.damageResistance,
       aggressiveness: this.aggressiveness,
       damage: this.damage,
+      accuracy: this.accuracy,
+      awareness: this.awareness,
       wet_timer: this.wetTimer,
       litter_size: this.litterSize,
       gestation_duration: this.geneticGestationDuration,
@@ -752,6 +860,90 @@ export class Squibble {
     const youngLimit = this.maxAge * 0.2; // First 1/5
     const oldLimit = this.maxAge * 0.8;   // Last 1/5
     return this.age >= youngLimit && this.age <= oldLimit;
+  }
+  
+  /**
+   * Start combat with a target (called by Gnawlin when it attacks)
+   */
+  startCombat(target: any): void {
+    if (this.isInCombat) return; // Already in combat
+    
+    this.isInCombat = true;
+    this.combatTarget = target;
+    this.combatTurn = false; // Squibble goes second (Gnawlin attacks first)
+    this.combatTimer = this.combatTurnDuration;
+  }
+  
+  /**
+   * End combat
+   */
+  endCombat(): void {
+    if (this.combatTarget) {
+      // Clear target's combat state if it's still pointing to us
+      if (this.combatTarget.combatTarget === this) {
+        this.combatTarget.isInCombat = false;
+        this.combatTarget.combatTarget = null;
+        this.combatTarget.combatTurn = false;
+        this.combatTarget.combatTimer = 0;
+      }
+    }
+    
+    this.isInCombat = false;
+    this.combatTarget = null;
+    this.combatTurn = false;
+    this.combatTimer = 0;
+  }
+  
+  /**
+   * Perform an attack on the target
+   */
+  performAttack(target: any): void {
+    // Check accuracy - chance to hit
+    if (Math.random() < this.accuracy) {
+      // Hit! Calculate damage
+      const baseDamage = this.damage;
+      // Apply target's damage resistance
+      const actualDamage = baseDamage * (1 - target.damageResistance);
+      target.health = Math.max(0, target.health - actualDamage);
+      
+      // Check if target died
+      if (target.health <= 0) {
+        target.alive = false;
+        this.endCombat();
+      }
+    }
+    // Miss - no damage dealt
+  }
+  
+  /**
+   * Find the nearest Gnawlin within vision range
+   */
+  private findNearestGnawlin(gnawlinManager: any): any | null {
+    let nearestGnawlin: any | null = null;
+    let nearestDistance = Infinity;
+
+    for (const gnawlin of gnawlinManager.getAlive()) {
+      const dx = gnawlin.x - this.x;
+      const dy = gnawlin.y - this.y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+
+      if (distance <= this.effectiveVision && distance < nearestDistance) {
+        nearestGnawlin = gnawlin;
+        nearestDistance = distance;
+      }
+    }
+    return nearestGnawlin;
+  }
+
+  /**
+   * Flee from a predator
+   */
+  private fleeFrom(predator: any): void {
+    const dx = predator.x - this.x;
+    const dy = predator.y - this.y;
+    // Move in the opposite direction
+    this.direction = Math.atan2(dy, dx) + Math.PI;
+    // Increase speed temporarily? (Future enhancement)
   }
   
   /**

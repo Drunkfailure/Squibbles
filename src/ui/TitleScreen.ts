@@ -28,6 +28,7 @@ export class TitleScreen {
   
   // Settings
   private creatureCount: number = 200;
+  private gnawlinCount: number = 0; // Default to 0 (no gnawlins)
   private mapWidth: number = 6000;
   private mapHeight: number = 6000;
   private biomeScale: number = 5;
@@ -236,8 +237,13 @@ export class TitleScreen {
         </div>
         
         <div style="margin-bottom: 15px;">
-          <label>Creatures (1-1000):</label>
+          <label>Squibbles (1-1000):</label>
           <input type="number" id="creature-count" value="200" min="1" max="1000" style="margin-left: 10px; padding: 5px; width: 100px;">
+        </div>
+        
+        <div style="margin-bottom: 15px;">
+          <label>Gnawlins (0-500):</label>
+          <input type="number" id="gnawlin-count" value="0" min="0" max="500" style="margin-left: 10px; padding: 5px; width: 100px;">
         </div>
         
         <div style="margin-bottom: 15px;">
@@ -314,10 +320,12 @@ export class TitleScreen {
   
   private getSettingsAndStart(): void {
     const creatureInput = document.getElementById('creature-count') as HTMLInputElement;
+    const gnawlinInput = document.getElementById('gnawlin-count') as HTMLInputElement;
     const widthInput = document.getElementById('map-width') as HTMLInputElement;
     const heightInput = document.getElementById('map-height') as HTMLInputElement;
     
     this.creatureCount = Math.max(1, Math.min(1000, parseInt(creatureInput.value) || 200));
+    this.gnawlinCount = Math.max(0, Math.min(500, parseInt(gnawlinInput.value) || 0));
     this.mapWidth = Math.max(1000, Math.min(10000, parseInt(widthInput.value) || 6000));
     this.mapHeight = Math.max(1000, Math.min(10000, parseInt(heightInput.value) || 6000));
     
@@ -327,6 +335,7 @@ export class TitleScreen {
       screenWidth: window.innerWidth,
       screenHeight: window.innerHeight,
       creatureCount: this.creatureCount,
+      gnawlinCount: this.gnawlinCount,
       terrain: {
         biome_scale: this.biomeScale,
         biome_weights: { ...this.biomeWeights },

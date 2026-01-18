@@ -224,7 +224,7 @@ export class FoodManager {
   }
   
   /** Returns { hungerGain, thirstGain, healthDamage? } or null. Cactus: healthDamage, intelligence reduces prick. Tundratree (lichen): hungerGain scaled by metabolism (slow=more, fast=less). */
-  eatFoodAtPosition(x: number, y: number, radius: number = 10, intelligence: number = 0.5, metabolism: number = 0.5): { hungerGain: number; thirstGain: number; healthDamage?: number } | null {
+  eatFoodAtPosition(x: number, y: number, radius: number = 10, intelligence: number = 0.5, metabolism: number = 0.5): { hungerGain: number; thirstGain: number; healthDamage?: number; species?: FoodSpecies } | null {
     const food = this.getFoodAtPosition(x, y, radius);
     if (!food) return null;
     
@@ -239,7 +239,7 @@ export class FoodManager {
       hungerGain *= lichenMultiplier;
     }
     
-    const result: { hungerGain: number; thirstGain: number; healthDamage?: number } = { hungerGain, thirstGain };
+    const result: { hungerGain: number; thirstGain: number; healthDamage?: number; species?: FoodSpecies } = { hungerGain, thirstGain, species: food.species };
     
     // Cactus: spines can prick. Higher intelligence = lower chance. Cactus never restores health.
     if (food.species === 'cactus') {

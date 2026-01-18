@@ -7,6 +7,8 @@ import { Container, Graphics, Sprite } from 'pixi.js';
 import { AssetLoader } from '../utils/AssetLoader';
 import { SquibbleManager } from '../creatures/SquibbleManager';
 import { Squibble } from '../creatures/Squibble';
+import { GnawlinManager } from '../creatures/GnawlinManager';
+import { Gnawlin } from '../creatures/Gnawlin';
 import { FoodManager } from '../food/FoodManager';
 import { generateWorld, WorldData } from '../terrain/WorldGenerator';
 import { WaterMap } from '../terrain/WaterMap';
@@ -21,6 +23,7 @@ import { FamilyTree } from '../ui/FamilyTree';
 
 export class Simulation extends Game {
   private squibbleManager: SquibbleManager;
+  private gnawlinManager: GnawlinManager;
   private foodManager: FoodManager;
   private waterMap: WaterMap | null = null;
   private worldData: WorldData | null = null;
@@ -34,7 +37,7 @@ export class Simulation extends Game {
   private maxZoom: number = 2.0;
   private zoomSpeed: number = 0.1;
   private cameraMoveSpeed: number = 10;
-  private selectedSquibble: Squibble | null = null;
+  private selectedCreature: Squibble | Gnawlin | null = null;
   
   // Rendering containers
   private terrainContainer: Container;
@@ -64,6 +67,7 @@ export class Simulation extends Game {
     super(settings);
     
     this.squibbleManager = new SquibbleManager();
+    this.gnawlinManager = new GnawlinManager();
     this.foodManager = new FoodManager(
       settings.mapWidth,
       settings.mapHeight
@@ -106,15 +110,17 @@ export class Simulation extends Game {
     
     // Set up family tree callback
     this.ui.setFamilyTreeCallback(() => {
-      if (this.selectedSquibble) {
+      if (this.selectedCreature) {
         const allSquibbles = this.squibbleManager.getAll();
+        const allGnawlins = this.gnawlinManager.getAll();
         this.familyTree.show(
-          this.selectedSquibble,
+          this.selectedCreature,
           allSquibbles,
-          (squibble: Squibble) => {
-            // When a squibble is clicked in the family tree, select it
-            this.selectedSquibble = squibble;
-            this.ui.drawSquibbleDetails(squibble);
+          allGnawlins,
+          (creature: Squibble | Gnawlin) => {
+            // When a creature is clicked in the family tree, select it
+            this.selectedCreature = creature;
+            this.ui.drawSquibbleDetails(creature);
           }
         );
       }
@@ -135,6 +141,7 @@ export class Simulation extends Game {
       onProgress(98, 'Spawning creatures...');
     }
     this.spawnInitialSquibbles();
+    this.spawnInitialGnawlins();
     
     if (onProgress) {
       onProgress(100, 'Complete!');
@@ -192,6 +199,25 @@ export class Simulation extends Game {
     console.log(`Finished spawning ${count} squibbles`);
   }
   
+  private spawnInitialGnawlins(): void {
+    const count = this.settings.gnawlinCount;
+    if (count === 0) return; // No gnawlins to spawn
+    
+    console.log(`Spawning ${count} gnawlins...`);
+    
+    for (let i = 0; i < count; i++) {
+      const x = 50 + Math.random() * (this.settings.mapWidth - 100);
+      const y = 50 + Math.random() * (this.settings.mapHeight - 100);
+      this.gnawlinManager.addGnawlin(x, y);
+      
+      if (i % 50 === 0 && i > 0) {
+        console.log(`Spawned ${i}/${count} gnawlins...`);
+      }
+    }
+    
+    console.log(`Finished spawning ${count} gnawlins`);
+  }
+  
   protected onUpdate(dt: number): void {
     // Handle camera movement
     this.handleCameraMovement();
@@ -211,6 +237,15 @@ export class Simulation extends Game {
         this.settings.mapWidth,
         this.settings.mapHeight,
         this.foodManager,
+        this.waterMap || undefined,
+        getBiomeAt,
+        this.gnawlinManager // Pass gnawlinManager for predator detection
+      );
+      this.gnawlinManager.updateAll(
+        dt,
+        this.settings.mapWidth,
+        this.settings.mapHeight,
+        this.squibbleManager,
         this.waterMap || undefined,
         getBiomeAt
       );
@@ -299,15 +334,77 @@ export class Simulation extends Game {
     
     stats.available_food = this.foodManager.getFoodCount();
     
+    // Record Gnawlin stats with prefix
+    const gnawlins = this.gnawlinManager.getAlive();
+    const gnawlinAlive = gnawlins.length;
+    
+    if (gnawlinAlive > 0) {
+      let gnawlinTotalHunger = 0, gnawlinTotalThirst = 0, gnawlinTotalHealth = 0;
+      let gnawlinTotalSpeed = 0, gnawlinTotalVision = 0;
+      let gnawlinTotalVirility = 0, gnawlinTotalMaxAge = 0, gnawlinTotalIntelligence = 0, gnawlinTotalSwim = 0, gnawlinTotalMetabolism = 0;
+      let gnawlinTotalDamageResistance = 0, gnawlinTotalAggressiveness = 0, gnawlinTotalDamage = 0, gnawlinTotalAccuracy = 0;
+      let gnawlinSeekingFood = 0, gnawlinSeekingMate = 0, gnawlinPregnant = 0, gnawlinBreeding = 0;
+      let gnawlinMales = 0, gnawlinFemales = 0;
+      
+      for (const g of gnawlins) {
+        const gStats = g.getStats();
+        gnawlinTotalHunger += gStats.hunger;
+        gnawlinTotalThirst += gStats.thirst;
+        gnawlinTotalHealth += gStats.health;
+        gnawlinTotalSpeed += gStats.speed;
+        gnawlinTotalVision += gStats.vision;
+        gnawlinTotalVirility += gStats.virility;
+        gnawlinTotalMaxAge += gStats.max_age;
+        gnawlinTotalIntelligence += gStats.intelligence;
+        gnawlinTotalSwim += gStats.swim;
+        gnawlinTotalMetabolism += gStats.metabolism;
+        gnawlinTotalDamageResistance += gStats.damage_resistance;
+        gnawlinTotalAggressiveness += gStats.aggressiveness;
+        gnawlinTotalDamage += gStats.damage;
+        gnawlinTotalAccuracy += gStats.accuracy;
+        
+        if (gStats.seeking_food) gnawlinSeekingFood++;
+        if (gStats.seeking_mate) gnawlinSeekingMate++;
+        if (gStats.is_pregnant) gnawlinPregnant++;
+        if (g.isBreeding) gnawlinBreeding++;
+        if (gStats.gender === 'male') gnawlinMales++;
+        else gnawlinFemales++;
+      }
+      
+      stats.gnawlin_population = gnawlinAlive;
+      stats.gnawlin_avg_hunger = gnawlinTotalHunger / gnawlinAlive;
+      stats.gnawlin_avg_thirst = gnawlinTotalThirst / gnawlinAlive;
+      stats.gnawlin_avg_health = gnawlinTotalHealth / gnawlinAlive;
+      stats.gnawlin_avg_speed = gnawlinTotalSpeed / gnawlinAlive;
+      stats.gnawlin_avg_vision = gnawlinTotalVision / gnawlinAlive;
+      stats.gnawlin_avg_virility = gnawlinTotalVirility / gnawlinAlive;
+      stats.gnawlin_avg_max_age = gnawlinTotalMaxAge / gnawlinAlive;
+      stats.gnawlin_avg_intelligence = gnawlinTotalIntelligence / gnawlinAlive;
+      stats.gnawlin_avg_swim = gnawlinTotalSwim / gnawlinAlive;
+      stats.gnawlin_avg_metabolism = gnawlinTotalMetabolism / gnawlinAlive;
+      stats.gnawlin_avg_damage_resistance = gnawlinTotalDamageResistance / gnawlinAlive;
+      stats.gnawlin_avg_aggressiveness = gnawlinTotalAggressiveness / gnawlinAlive;
+      stats.gnawlin_avg_damage = gnawlinTotalDamage / gnawlinAlive;
+      stats.gnawlin_avg_accuracy = gnawlinTotalAccuracy / gnawlinAlive;
+      stats.gnawlin_seeking_food_count = gnawlinSeekingFood;
+      stats.gnawlin_seeking_mate_count = gnawlinSeekingMate;
+      stats.gnawlin_pregnant_count = gnawlinPregnant;
+      stats.gnawlin_breeding_count = gnawlinBreeding;
+      stats.gnawlin_male_count = gnawlinMales;
+      stats.gnawlin_female_count = gnawlinFemales;
+    } else {
+      stats.gnawlin_population = 0;
+    }
+    
     this.statsRecorder.update(dt, stats);
   }
   
   private handleCameraMovement(): void {
     // If a squibble is selected, automatically follow it
-    if (this.selectedSquibble && this.selectedSquibble.alive) {
-      // Center camera on the selected squibble (works with any zoom level)
-      this.cameraX = this.settings.screenWidth / 2 - this.selectedSquibble.x * this.zoomLevel;
-      this.cameraY = this.settings.screenHeight / 2 - this.selectedSquibble.y * this.zoomLevel;
+    if (this.selectedCreature && this.selectedCreature.alive) {
+      // Center camera on the selected creature (works with any zoom level)
+      this.cameraX = this.settings.screenWidth / 2 - this.selectedCreature.x * this.zoomLevel;
+      this.cameraY = this.settings.screenHeight / 2 - this.selectedCreature.y * this.zoomLevel;
     } else {
       // Manual camera movement (only when nothing is selected)
       const events = this.getEventManager();
@@ -456,6 +553,50 @@ export class Simulation extends Game {
       }
     }
     
+    // Gnawlins (render as squares)
+    const gnawlins = this.gnawlinManager.getAlive();
+    for (const gnawlin of gnawlins) {
+      if (gnawlin.x >= viewX && gnawlin.x < viewX + viewW &&
+          gnawlin.y >= viewY && gnawlin.y < viewY + viewH) {
+        const sx = (gnawlin.x - viewX) * this.zoomLevel;
+        const sy = (gnawlin.y - viewY) * this.zoomLevel;
+        const size = Math.max(1, gnawlin.currentSize * this.zoomLevel);
+        drawables.push({
+          sortY: gnawlin.y + gnawlin.currentSize,
+          draw: () => {
+            // Draw square for gnawlin
+            const halfSize = size / 2;
+            this.renderer.drawRect(
+              sx - halfSize,
+              sy - halfSize,
+              size,
+              size,
+              gnawlin.color,
+              1.0
+            );
+            if (gnawlin.isBreeding) {
+              const loveTexture = AssetLoader.getIconTexture('love');
+              if (loveTexture) {
+                const loveSize = size * 1.5 * this.zoomLevel;
+                const loveSprite = new Sprite(loveTexture);
+                loveSprite.width = loveSize;
+                loveSprite.height = loveSize;
+                loveSprite.x = sx;
+                loveSprite.y = sy - size / 2 - loveSize * 0.4;
+                loveSprite.anchor.set(0.5, 0.5);
+                this.entityContainer.addChild(loveSprite);
+              }
+            }
+            this.drawHealthBar(sx, sy, size / 2, gnawlin.health, gnawlin.maxHealth, this.zoomLevel);
+            this.drawStatusIcons(sx, sy, size / 2, gnawlin, this.zoomLevel);
+            const endX = sx + Math.cos(gnawlin.direction) * (size / 2 + 5) * this.zoomLevel;
+            const endY = sy + Math.sin(gnawlin.direction) * (size / 2 + 5) * this.zoomLevel;
+            this.renderer.drawLine(sx, sy, endX, endY, [255, 255, 255], Math.max(1, 2 * this.zoomLevel));
+          },
+        });
+      }
+    }
+    
     // Sort by Y ascending (lower Y = behind, higher Y = in front) and draw
     drawables.sort((a, b) => a.sortY - b.sortY);
     for (const d of drawables) {
@@ -464,32 +605,42 @@ export class Simulation extends Game {
     
     // Draw UI
     const stats = this.squibbleManager.getStats();
+    const gnawlinStats = this.gnawlinManager.getStats();
     const foodStats = this.foodManager.getStats();
-    this.ui.drawStatsPanel(stats, foodStats, this.zoomLevel);
+    this.ui.drawStatsPanel(stats, foodStats, this.zoomLevel, gnawlinStats);
     this.ui.drawPauseIndicator(this.isPaused());
     
-    // Draw selected squibble details
-    if (this.selectedSquibble && this.selectedSquibble.alive) {
-      this.ui.drawSquibbleDetails(this.selectedSquibble);
+    // Draw selected creature details
+    if (this.selectedCreature && this.selectedCreature.alive) {
+      this.ui.drawSquibbleDetails(this.selectedCreature);
       
-      // Draw selection indicator (highlight circle)
-      if (this.selectedSquibble.x >= viewX && this.selectedSquibble.x < viewX + viewW &&
-          this.selectedSquibble.y >= viewY && this.selectedSquibble.y < viewY + viewH) {
-        const sx = (this.selectedSquibble.x - viewX) * this.zoomLevel;
-        const sy = (this.selectedSquibble.y - viewY) * this.zoomLevel;
-        const radius = Math.max(1, this.selectedSquibble.radius * this.zoomLevel);
+      // Draw selection indicator
+      if (this.selectedCreature.x >= viewX && this.selectedCreature.x < viewX + viewW &&
+          this.selectedCreature.y >= viewY && this.selectedCreature.y < viewY + viewH) {
+        const sx = (this.selectedCreature.x - viewX) * this.zoomLevel;
+        const sy = (this.selectedCreature.y - viewY) * this.zoomLevel;
         
-        // Draw selection ring
         const selectionRing = new Graphics();
-        selectionRing.lineStyle(3, 0x00ffff, 1.0); // Cyan ring
-        selectionRing.drawCircle(sx, sy, radius + 3);
+        selectionRing.lineStyle(3, 0x00ffff, 1.0); // Cyan selection
+        
+        if (this.selectedCreature instanceof Squibble) {
+          // Draw circle for Squibbles
+          const radius = Math.max(1, this.selectedCreature.radius * this.zoomLevel);
+          selectionRing.drawCircle(sx, sy, radius + 3);
+        } else if (this.selectedCreature instanceof Gnawlin) {
+          // Draw square outline for Gnawlins
+          const size = Math.max(1, this.selectedCreature.currentSize * this.zoomLevel);
+          const halfSize = size / 2 + 3;
+          selectionRing.drawRect(sx - halfSize, sy - halfSize, size + 6, size + 6);
+        }
+        
         this.entityContainer.addChild(selectionRing);
       }
     } else {
-      // No selection or squibble died - clear the details panel
-      if (this.selectedSquibble && !this.selectedSquibble.alive) {
-        // Selected squibble died, deselect
-        this.selectedSquibble = null;
+      // No selection or creature died - clear the details panel
+      if (this.selectedCreature && !this.selectedCreature.alive) {
+        // Selected creature died, deselect
+        this.selectedCreature = null;
       }
       // Clear the details panel by passing null
       this.ui.drawSquibbleDetails(null);
@@ -511,6 +662,7 @@ export class Simulation extends Game {
       } else if (e.code === 'KeyR') {
         // Reset simulation
         this.squibbleManager.clear();
+        this.gnawlinManager.clear();
         this.foodManager = new FoodManager(
           this.settings.mapWidth,
           this.settings.mapHeight
@@ -521,12 +673,13 @@ export class Simulation extends Game {
           this.worldData?.cols,
           this.worldData?.rows
         );
-        this.selectedSquibble = null;
+        this.selectedCreature = null;
         this.statsRecorder.clear();
         this.totalBirths = 0;
         this.totalDeaths = 0;
         this.lastAliveCount = 0;
         this.spawnInitialSquibbles();
+        this.spawnInitialGnawlins();
       } else if (e.code === 'KeyA') {
         // Add a new squibble
         const x = 50 + Math.random() * (this.settings.mapWidth - 100);
@@ -580,13 +733,13 @@ export class Simulation extends Game {
             return;
           }
           
-          // Regular click: Select squibble (camera will auto-follow)
-          const clickedSquibble = this.findSquibbleAtPosition(worldX, worldY);
-          if (clickedSquibble) {
-            this.selectedSquibble = clickedSquibble;
+          // Regular click: Select creature (camera will auto-follow)
+          const clickedCreature = this.findCreatureAtPosition(worldX, worldY);
+          if (clickedCreature) {
+            this.selectedCreature = clickedCreature;
           } else {
             // Clicked empty space - deselect
-            this.selectedSquibble = null;
+            this.selectedCreature = null;
           }
         }
       }
@@ -594,11 +747,24 @@ export class Simulation extends Game {
   }
   
   /**
-   * Find a squibble at the given world coordinates
+   * Find a creature (Squibble or Gnawlin) at the given world coordinates
+   * Prioritizes Gnawlins if both are at the same position (since they're larger)
    */
-  private findSquibbleAtPosition(worldX: number, worldY: number): Squibble | null {
+  private findCreatureAtPosition(worldX: number, worldY: number): Squibble | Gnawlin | null {
     const clickRadius = 15; // Click detection radius
     
+    // Check Gnawlins first (they're larger, so prioritize them)
+    for (const gnawlin of this.gnawlinManager.getAlive()) {
+      const dx = gnawlin.x - worldX;
+      const dy = gnawlin.y - worldY;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      
+      if (distance <= gnawlin.currentSize / 2 + clickRadius) {
+        return gnawlin;
+      }
+    }
+    
+    // Check Squibbles
     for (const squibble of this.squibbleManager.getAlive()) {
       const dx = squibble.x - worldX;
       const dy = squibble.y - worldY;
@@ -687,6 +853,11 @@ export class Simulation extends Game {
     // Pregnant icon
     if (squibble.isPregnant) {
       icons.push('fetus');
+    }
+    
+    // Combat icon (sword)
+    if (squibble.isInCombat) {
+      icons.push('sword');
     }
     
     // Health icon (show when below 50) - commented out since health.png doesn't exist

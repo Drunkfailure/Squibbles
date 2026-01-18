@@ -178,11 +178,12 @@ export class SquibbleManager {
     screenHeight: number,
     foodManager?: FoodManager,
     waterMap?: WaterMap,
-    getBiomeAt?: (x: number, y: number) => number
+    getBiomeAt?: (x: number, y: number) => number,
+    gnawlinManager?: any // GnawlinManager for predator detection
   ): void {
     // Update all squibbles
     for (const squibble of this.squibbles) {
-      squibble.update(dt, screenWidth, screenHeight, foodManager, waterMap, this, getBiomeAt);
+      squibble.update(dt, screenWidth, screenHeight, foodManager, waterMap, this, getBiomeAt, gnawlinManager);
     }
     
     // Process breeding
