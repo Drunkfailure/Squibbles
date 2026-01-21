@@ -32,7 +32,25 @@ export class SquibbleManager {
     
     for (const other of this.squibbles) {
       if (other === seeker || !other.alive) continue;
-      if (!seeker.canMateWith(other, false, waterMap)) continue;
+      
+      // Check if the other is already breeding
+      const isOtherBreeding = other.isBreeding;
+      let allowInterruption = false;
+      
+      // If the other is breeding, use aggressiveness to determine if we'll try to interrupt
+      if (isOtherBreeding) {
+        // Aggressiveness (0-1) determines likelihood of attempting to mate with already-breeding Squibbles
+        // Higher aggressiveness = more likely to try
+        if (Math.random() < seeker.aggressiveness) {
+          allowInterruption = true;
+        } else {
+          // Not aggressive enough - skip this already-breeding Squibble
+          continue;
+        }
+      }
+      
+      // Check if they can mate (with interruption allowed if we passed the aggressiveness check)
+      if (!seeker.canMateWith(other, allowInterruption, waterMap)) continue;
       
       const dx = other.x - seeker.x;
       const dy = other.y - seeker.y;
@@ -159,10 +177,23 @@ export class SquibbleManager {
       if (!squibble1.isBreeding && squibble1.seekingMate) {
         for (let j = i + 1; j < this.squibbles.length; j++) {
           const squibble2 = this.squibbles[j];
-          if (!squibble2.alive || squibble2.isBreeding || !squibble2.seekingMate) continue;
+          if (!squibble2.alive || !squibble2.seekingMate) continue;
           
-          // Check if they can mate
-          if (!squibble1.canMateWith(squibble2, false, waterMap)) continue;
+          // If squibble2 is already breeding, check if squibble1 is aggressive enough to interrupt
+          let allowInterruption = false;
+          if (squibble2.isBreeding) {
+            // Aggressiveness determines likelihood of attempting to interrupt
+            // This check happens here as a final confirmation (in addition to findPotentialMate)
+            if (Math.random() < squibble1.aggressiveness) {
+              allowInterruption = true;
+            } else {
+              // Not aggressive enough - skip this already-breeding Squibble
+              continue;
+            }
+          }
+          
+          // Check if they can mate (with interruption allowed if aggressiveness check passed)
+          if (!squibble1.canMateWith(squibble2, allowInterruption, waterMap)) continue;
           
           // Check if they're close enough
           const dx = squibble2.x - squibble1.x;
@@ -170,6 +201,14 @@ export class SquibbleManager {
           const distance = Math.sqrt(dx * dx + dy * dy);
           
           if (distance <= this.breedingDistance) {
+            // If interrupting, cancel the existing breeding first
+            if (allowInterruption && squibble2.isBreeding && squibble2.breedingPartner) {
+              squibble2.cancelBreeding();
+              if (squibble2.breedingPartner && squibble2.breedingPartner.alive) {
+                squibble2.breedingPartner.cancelBreeding();
+              }
+            }
+            
             // Start breeding (10 seconds)
             squibble1.startBreeding(squibble2);
             squibble2.startBreeding(squibble1);
