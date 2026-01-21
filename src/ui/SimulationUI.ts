@@ -60,12 +60,17 @@ export class SimulationUI {
     const panelHeight = this.showControls ? 450 : 250;
     const panelWidth = 300;
     
-    // Draw panel background
+    // Draw panel background with border (matching graph style)
     this.statsPanel = new Graphics();
+    // Background (darker, matching graph)
     this.statsPanel
-      .beginFill(0x000000, 0.78) // ~200/255 alpha
-      .drawRect(10, 10, panelWidth, panelHeight)
+      .beginFill(0x0d0d1a, 0.95) // Dark background matching graph
+      .drawRoundedRect(10, 10, panelWidth, panelHeight, 8)
       .endFill();
+    // Border
+    this.statsPanel
+      .lineStyle(2, 0x34495e, 1.0) // Subtle border
+      .drawRoundedRect(10, 10, panelWidth, panelHeight, 8);
     this.container.addChild(this.statsPanel);
     
     // Create text
@@ -201,12 +206,15 @@ export class SimulationUI {
     const buttonMargin = 15;
     const buttonSpacing = 5;
     const textAreaHeight = 480; // Increased height for text content (accommodates all stats)
-    // Total height: text area + page buttons + spacing + family tree button + margins
-    const panelHeight = textAreaHeight + (buttonHeight * 2) + (buttonSpacing * 2) + (buttonMargin * 2) + 50; // ~650px total
+    // Total height: text area + page buttons + spacing + family tree button + margins + extra space
+    const panelHeight = textAreaHeight + (buttonHeight * 2) + (buttonSpacing * 2) + (buttonMargin * 2) + 110; // ~710px total (extended by 60px)
     const panelX = this.screenWidth - panelWidth - 10;
     const panelY = 10;
-    // Position buttons at the bottom of the panel (with margin from bottom)
-    const buttonY = panelY + panelHeight - buttonHeight - buttonMargin;
+    // Position buttons exactly 20 pixels from the bottom of the panel
+    // Family tree button bottom should be 20px from panel bottom
+    // buttonY is for Page 1/2 buttons, Family Tree is below them
+    const familyTreeButtonY = panelY + panelHeight - 20 - buttonHeight;
+    const buttonY = familyTreeButtonY - buttonHeight - buttonSpacing;
     
     // Store panel bounds for click detection
     this.panelX = panelX;
@@ -214,12 +222,17 @@ export class SimulationUI {
     this.panelWidth = panelWidth;
     this.panelHeight = panelHeight;
     
-    // Draw detail panel background
+    // Draw detail panel background with border (matching graph style)
     this.squibbleDetailPanel = new Graphics();
+    // Background (darker, matching graph)
     this.squibbleDetailPanel
-      .beginFill(0x000000, 0.85)
-      .drawRect(panelX, panelY, panelWidth, panelHeight)
+      .beginFill(0x0d0d1a, 0.95) // Dark background matching graph
+      .drawRoundedRect(panelX, panelY, panelWidth, panelHeight, 8)
       .endFill();
+    // Border
+    this.squibbleDetailPanel
+      .lineStyle(2, 0x34495e, 1.0) // Subtle border
+      .drawRoundedRect(panelX, panelY, panelWidth, panelHeight, 8);
     this.container.addChild(this.squibbleDetailPanel);
     
     // Create detail text style
@@ -321,12 +334,13 @@ export class SimulationUI {
     const buttonWidth = (panelWidth - 20) / 2;
     // buttonSpacing is already declared above (line 196)
     
-    // Page 1 button
+    // Page 1 button (matching graph button style)
     const page1ButtonX = panelX + 10;
     this.page1Button = new Graphics();
+    const page1Color = this.currentPage === 1 ? 0x3498db : 0x555555; // Blue when active, gray when inactive
     this.page1Button
-      .beginFill(this.currentPage === 1 ? 0x444444 : 0x222222, 0.9)
-      .drawRect(page1ButtonX, buttonY, buttonWidth, buttonHeight)
+      .beginFill(page1Color, 0.9)
+      .drawRoundedRect(page1ButtonX, buttonY, buttonWidth, buttonHeight, 5)
       .endFill();
     this.page1Button.interactive = true;
     this.page1Button.buttonMode = true;
@@ -341,12 +355,13 @@ export class SimulationUI {
     this.page1ButtonText.y = buttonY + buttonHeight / 2 - this.page1ButtonText.height / 2;
     this.container.addChild(this.page1ButtonText);
     
-    // Page 2 button
+    // Page 2 button (matching graph button style)
     const page2ButtonX = page1ButtonX + buttonWidth + buttonSpacing;
     this.page2Button = new Graphics();
+    const page2Color = this.currentPage === 2 ? 0x3498db : 0x555555; // Blue when active, gray when inactive
     this.page2Button
-      .beginFill(this.currentPage === 2 ? 0x444444 : 0x222222, 0.9)
-      .drawRect(page2ButtonX, buttonY, buttonWidth, buttonHeight)
+      .beginFill(page2Color, 0.9)
+      .drawRoundedRect(page2ButtonX, buttonY, buttonWidth, buttonHeight, 5)
       .endFill();
     this.page2Button.interactive = true;
     this.page2Button.buttonMode = true;
@@ -361,12 +376,12 @@ export class SimulationUI {
     this.page2ButtonText.y = buttonY + buttonHeight / 2 - this.page2ButtonText.height / 2;
     this.container.addChild(this.page2ButtonText);
     
-    // Family Tree button (full width, below page buttons)
-    const familyTreeButtonY = buttonY + buttonHeight + buttonSpacing;
+    // Family Tree button (full width, below page buttons, matching graph button style)
+    // familyTreeButtonY is already calculated above to be exactly 50px from bottom
     this.familyTreeButton = new Graphics();
     this.familyTreeButton
-      .beginFill(0x3498db, 0.9)
-      .drawRect(panelX + 10, familyTreeButtonY, panelWidth - 20, buttonHeight)
+      .beginFill(0x3498db, 0.9) // Blue matching graph buttons
+      .drawRoundedRect(panelX + 10, familyTreeButtonY, panelWidth - 20, buttonHeight, 5)
       .endFill();
     this.familyTreeButton.interactive = true;
     this.familyTreeButton.buttonMode = true;

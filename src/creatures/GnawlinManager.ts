@@ -10,6 +10,12 @@ export class GnawlinManager {
   private gnawlins: Gnawlin[] = [];
   private breedingDistance: number = 20; // Distance needed for breeding
   
+  // Death tracking
+  private deathsByAge: number = 0;
+  private deathsByHunger: number = 0;
+  private deathsByThirst: number = 0;
+  private deathsByChildbirth: number = 0;
+  
   addGnawlin(x: number, y: number, color?: [number, number, number], parent1?: Gnawlin, parent2?: Gnawlin): void {
     this.gnawlins.push(new Gnawlin(x, y, color, parent1, parent2));
   }
@@ -141,7 +147,25 @@ export class GnawlinManager {
     // Process pregnancies (births)
     this.processPregnancies();
     
-    // Remove dead gnawlins
+    // Track deaths and remove dead gnawlins
+    for (const gnawlin of this.gnawlins) {
+      if (!gnawlin.alive && gnawlin.deathCause) {
+        switch (gnawlin.deathCause) {
+          case 'age':
+            this.deathsByAge++;
+            break;
+          case 'hunger':
+            this.deathsByHunger++;
+            break;
+          case 'thirst':
+            this.deathsByThirst++;
+            break;
+          case 'childbirth':
+            this.deathsByChildbirth++;
+            break;
+        }
+      }
+    }
     this.gnawlins = this.gnawlins.filter(g => g.alive);
   }
   
@@ -168,5 +192,21 @@ export class GnawlinManager {
   
   clear(): void {
     this.gnawlins = [];
+    this.deathsByAge = 0;
+    this.deathsByHunger = 0;
+    this.deathsByThirst = 0;
+    this.deathsByChildbirth = 0;
+  }
+  
+  /**
+   * Get death counts by cause
+   */
+  getDeathCounts() {
+    return {
+      age: this.deathsByAge,
+      hunger: this.deathsByHunger,
+      thirst: this.deathsByThirst,
+      childbirth: this.deathsByChildbirth,
+    };
   }
 }

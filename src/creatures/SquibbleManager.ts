@@ -11,6 +11,14 @@ export class SquibbleManager {
   private squibbles: Squibble[] = [];
   private breedingDistance: number = 20; // Distance needed for breeding
   
+  // Death tracking
+  private deathsByAge: number = 0;
+  private deathsByHunger: number = 0;
+  private deathsByThirst: number = 0;
+  private deathsByPredator: number = 0;
+  private deathsByDrowning: number = 0;
+  private deathsByChildbirth: number = 0;
+  
   addSquibble(x: number, y: number, color?: [number, number, number], parent1?: Squibble, parent2?: Squibble): void {
     this.squibbles.push(new Squibble(x, y, color, parent1, parent2));
   }
@@ -192,7 +200,31 @@ export class SquibbleManager {
     // Process pregnancies (births)
     this.processPregnancies();
     
-    // Remove dead squibbles
+    // Track deaths and remove dead squibbles
+    for (const squibble of this.squibbles) {
+      if (!squibble.alive && squibble.deathCause) {
+        switch (squibble.deathCause) {
+          case 'age':
+            this.deathsByAge++;
+            break;
+          case 'hunger':
+            this.deathsByHunger++;
+            break;
+          case 'thirst':
+            this.deathsByThirst++;
+            break;
+          case 'predator':
+            this.deathsByPredator++;
+            break;
+          case 'drowning':
+            this.deathsByDrowning++;
+            break;
+          case 'childbirth':
+            this.deathsByChildbirth++;
+            break;
+        }
+      }
+    }
     this.squibbles = this.squibbles.filter(s => s.alive);
   }
   
@@ -235,5 +267,25 @@ export class SquibbleManager {
   
   clear(): void {
     this.squibbles = [];
+    this.deathsByAge = 0;
+    this.deathsByHunger = 0;
+    this.deathsByThirst = 0;
+    this.deathsByPredator = 0;
+    this.deathsByDrowning = 0;
+    this.deathsByChildbirth = 0;
+  }
+  
+  /**
+   * Get death counts by cause
+   */
+  getDeathCounts() {
+    return {
+      age: this.deathsByAge,
+      hunger: this.deathsByHunger,
+      thirst: this.deathsByThirst,
+      predator: this.deathsByPredator,
+      drowning: this.deathsByDrowning,
+      childbirth: this.deathsByChildbirth,
+    };
   }
 }

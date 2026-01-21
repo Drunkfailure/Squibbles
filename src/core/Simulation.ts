@@ -77,6 +77,12 @@ export class Simulation extends Game {
     
     // Stats tracking
     this.statsRecorder = new StatsRecorder(1.0); // Record every 1 second
+    
+    // Disable Gnawlin stats if no Gnawlins at start
+    if (settings.gnawlinCount === 0) {
+      this.statsRecorder.disableGnawlinStats();
+    }
+    
     this.statsGraphRenderer = new StatsGraphRenderer(this.statsRecorder);
     
     // ESC menu
@@ -271,11 +277,21 @@ export class Simulation extends Game {
     }
     this.lastAliveCount = currentAlive;
     
+    // Get death counts from managers
+    const squibbleDeaths = this.squibbleManager.getDeathCounts();
+    const gnawlinDeaths = this.gnawlinManager.getDeathCounts();
+    
     // Calculate detailed stats
     const stats: Record<string, number> = {
       population: currentAlive,
       births: this.totalBirths,
       deaths: this.totalDeaths,
+      deaths_by_age: squibbleDeaths.age,
+      deaths_by_hunger: squibbleDeaths.hunger,
+      deaths_by_thirst: squibbleDeaths.thirst,
+      deaths_by_predator: squibbleDeaths.predator,
+      deaths_by_drowning: squibbleDeaths.drowning,
+      deaths_by_childbirth: squibbleDeaths.childbirth,
     };
     
     if (currentAlive > 0) {
@@ -395,6 +411,12 @@ export class Simulation extends Game {
     } else {
       stats.gnawlin_population = 0;
     }
+    
+    // Add Gnawlin death counts
+    stats.gnawlin_deaths_by_age = gnawlinDeaths.age;
+    stats.gnawlin_deaths_by_hunger = gnawlinDeaths.hunger;
+    stats.gnawlin_deaths_by_thirst = gnawlinDeaths.thirst;
+    stats.gnawlin_deaths_by_childbirth = gnawlinDeaths.childbirth;
     
     this.statsRecorder.update(dt, stats);
   }

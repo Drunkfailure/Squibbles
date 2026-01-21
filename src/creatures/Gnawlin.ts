@@ -141,6 +141,7 @@ export class Gnawlin {
   public alive: boolean = true;
   public age: number = 0; // Age in frames
   public maxAge: number; // Maximum age in frames before death (genetic)
+  public deathCause: 'age' | 'hunger' | 'thirst' | 'childbirth' | null = null;
   
   // Family tree tracking (using IDs instead of object references)
   public parent1Id: number | null = null; // Mother ID (or first parent ID)
@@ -268,6 +269,7 @@ export class Gnawlin {
     // Age
     this.age++;
     if (this.age >= this.maxAge) {
+      this.deathCause = 'age';
       this.alive = false;
       return;
     }
@@ -290,22 +292,47 @@ export class Gnawlin {
     
     // Update pregnancy
     if (this.isPregnant) {
-      this.pregnancyTimeRemaining -= dt;
-      if (this.pregnancyTimeRemaining <= 0) {
-        // Give birth (handled by GnawlinManager)
-        this.isPregnant = false;
-        this.pregnancyTimeRemaining = 0;
-        this.pregnancyFather = null;
-        this.pregnancyFatherId = null;
-      }
+      this.pregnancyTimeRemaining = Math.max(0, this.pregnancyTimeRemaining - dt);
+      // Birth is handled by GnawlinManager.processPregnancies()
     }
     
-    // Update breeding timer
-    if (this.isBreeding) {
-      this.breedingTimeRemaining -= dt;
-      if (this.breedingTimeRemaining <= 0) {
-        this.completeBreeding();
+    // Update breeding progress
+    if (this.isBreeding && this.breedingPartner) {
+      // Check if partner is still alive and breeding with us
+      if (!this.breedingPartner.alive || 
+          !this.breedingPartner.isBreeding || 
+          this.breedingPartner.breedingPartner !== this) {
+        // Partner died or stopped breeding - cancel
+        this.cancelBreeding();
+        return;
       }
+      
+      // Update breeding timer
+      this.breedingTimeRemaining = Math.max(0, this.breedingTimeRemaining - dt);
+      
+      // Keep breeding partners close together (maintain breeding distance)
+      const dx = this.breedingPartner.x - this.x;
+      const dy = this.breedingPartner.y - this.y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      const targetDistance = (this.currentSize + this.breedingPartner.currentSize) / 2 + 5; // Close together
+      
+      if (distance > targetDistance && distance > 0) {
+        // Move closer to partner
+        const pullStrength = (distance - targetDistance) * 0.3;
+        this.x += (dx / distance) * pullStrength;
+        this.y += (dy / distance) * pullStrength;
+      } else if (distance < targetDistance && distance > 0) {
+        // Push apart slightly if too close
+        const pushStrength = (targetDistance - distance) * 0.2;
+        this.x -= (dx / distance) * pushStrength;
+        this.y -= (dy / distance) * pushStrength;
+      }
+      
+      // Face the partner
+      this.direction = Math.atan2(dy, dx);
+      
+      // Stop movement while breeding (gnawlins stay in place during breeding)
+      // If breeding completes, it's handled by GnawlinManager
     }
     
     // Update eating timer
@@ -384,6 +411,15 @@ export class Gnawlin {
       this.health = Math.max(0, this.health - 0.5 * dt); // Lose health if starving/dehydrated
     }
     if (this.health <= 0) {
+      // Health <= 0 from starvation/dehydration
+      if (this.hunger <= 0) {
+        this.deathCause = 'hunger';
+      } else if (this.thirst <= 0) {
+        this.deathCause = 'thirst';
+      } else {
+        // Fallback to hunger if health is 0
+        this.deathCause = 'hunger';
+      }
       this.alive = false;
       return;
     }
@@ -494,17 +530,10 @@ export class Gnawlin {
       if (!isHungry && !isThirsty && this.seekingMate && !this.isBreeding && gnawlinManager) {
         const mate = gnawlinManager.findPotentialMate(this, waterMap);
         if (mate) {
+          // Move towards mate (GnawlinManager.processBreeding() will handle starting breeding when close enough)
           const dx = mate.x - this.x;
           const dy = mate.y - this.y;
-          const distance = Math.sqrt(dx * dx + dy * dy);
-          
-          // If close enough, start breeding
-          if (distance <= (this.currentSize + mate.currentSize + 10)) {
-            this.startBreeding(mate);
-          } else {
-            // Move towards mate
-            this.direction = Math.atan2(dy, dx);
-          }
+          this.direction = Math.atan2(dy, dx);
         }
       }
       
@@ -535,8 +564,8 @@ export class Gnawlin {
       }
     }
     
-    // Movement (only if not eating or drinking)
-    if (!this.isEating && !this.isDrinking) {
+    // Movement (only if not eating, drinking, or breeding)
+    if (!this.isEating && !this.isDrinking && !this.isBreeding) {
       const inWater = waterMap?.isWaterAt(this.x, this.y) ?? false;
       
       // Water evasion and crossing logic (similar to Squibbles)
@@ -807,6 +836,7 @@ export class Gnawlin {
     // Check if mother dies during childbirth
     if (Math.random() < deathRisk) {
       // Mother dies
+      this.deathCause = 'childbirth';
       this.alive = false;
       // Still give birth to babies before dying
     }
@@ -893,9 +923,13 @@ export class Gnawlin {
       
       // Check if target died
       if (target.health <= 0) {
+        target.deathCause = 'predator';
         target.alive = false;
         // Restore full hunger on successful kill
         this.hunger = this.hungerCapacity;
+        // Heal after successful kill (restore up to 50% of max health)
+        const healAmount = this.maxHealth * 0.5;
+        this.health = Math.min(this.maxHealth, this.health + healAmount);
         this.endCombat();
       }
     }

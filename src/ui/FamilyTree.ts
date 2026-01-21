@@ -49,8 +49,18 @@ export class FamilyTree {
     this.isVisible = false;
     if (this.container) {
       document.body.removeChild(this.container);
+      // Remove backdrop if it exists
+      const backdrop = (this.container as any).backdrop;
+      if (backdrop && backdrop.parentNode) {
+        document.body.removeChild(backdrop);
+      }
       this.container = null;
       this.chart = null;
+    }
+    // Also check for standalone backdrop
+    const standaloneBackdrop = document.getElementById('family-tree-backdrop');
+    if (standaloneBackdrop) {
+      document.body.removeChild(standaloneBackdrop);
     }
   }
 
@@ -65,20 +75,42 @@ export class FamilyTree {
    * Create the overlay container
    */
   private createOverlay(): void {
-    this.container = document.createElement('div');
-    this.container.id = 'family-tree-overlay';
-    this.container.style.cssText = `
+    // Create backdrop
+    const backdrop = document.createElement('div');
+    backdrop.id = 'family-tree-backdrop';
+    backdrop.style.cssText = `
       position: fixed;
       top: 0;
       left: 0;
       width: 100vw;
       height: 100vh;
-      background: rgba(0, 0, 0, 0.9);
+      background: rgba(0, 0, 0, 0.85);
       z-index: 10002;
+    `;
+    backdrop.onclick = () => this.hide();
+    document.body.appendChild(backdrop);
+
+    // Create centered modal container
+    this.container = document.createElement('div');
+    this.container.id = 'family-tree-overlay';
+    this.container.style.cssText = `
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 90vw;
+      height: 85vh;
+      max-width: 1600px;
+      max-height: 1200px;
+      background: #0d0d1a;
+      border: 2px solid #34495e;
+      border-radius: 8px;
+      z-index: 10003;
       display: flex;
       flex-direction: column;
       font-family: '${FontLoader.getFontFamily()}', monospace;
       color: white;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.8);
     `;
 
     // Header
@@ -127,6 +159,9 @@ export class FamilyTree {
     this.container.appendChild(chartContainer);
 
     document.body.appendChild(this.container);
+    
+    // Store backdrop reference for cleanup
+    (this.container as any).backdrop = backdrop;
 
     // Inject CSS to ensure links are always visible
     const styleId = 'family-tree-link-fix';

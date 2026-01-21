@@ -166,17 +166,32 @@ export class StatsGraphRenderer {
     const titleContainer = document.createElement('div');
     titleContainer.style.cssText = 'display: flex; align-items: center; gap: 20px; flex: 1;';
     
-    // Navigation arrows
-    const prevBtn = this.createNavButton('◀', () => this.switchCreatureType('squibble'), this.currentCreatureType === 'squibble');
+    // Check if Gnawlin stats are enabled
+    const gnawlinStatsEnabled = this.recorder.getStatConfigs().some(stat => 
+      stat.name.startsWith('gnawlin_') && stat.enabled
+    );
+    
+    // Navigation arrows (only show if Gnawlin stats are enabled)
+    let prevBtn: HTMLButtonElement | null = null;
+    let nextBtn: HTMLButtonElement | null = null;
+    
+    if (gnawlinStatsEnabled) {
+      prevBtn = this.createNavButton('◀', () => this.switchCreatureType('squibble'), this.currentCreatureType === 'squibble');
+      nextBtn = this.createNavButton('▶', () => this.switchCreatureType('gnawlin'), this.currentCreatureType === 'gnawlin');
+    }
+    
     const title = document.createElement('h1');
     title.id = 'stats-title';
     title.textContent = `Simulation Statistics - ${this.currentCreatureType.charAt(0).toUpperCase() + this.currentCreatureType.slice(1)}s`;
     title.style.cssText = 'margin: 0; color: #fff; font-size: 24px;';
-    const nextBtn = this.createNavButton('▶', () => this.switchCreatureType('gnawlin'), this.currentCreatureType === 'gnawlin');
     
-    titleContainer.appendChild(prevBtn);
+    if (prevBtn) {
+      titleContainer.appendChild(prevBtn);
+    }
     titleContainer.appendChild(title);
-    titleContainer.appendChild(nextBtn);
+    if (nextBtn) {
+      titleContainer.appendChild(nextBtn);
+    }
     header.appendChild(titleContainer);
     
     const buttonContainer = document.createElement('div');
@@ -308,7 +323,12 @@ export class StatsGraphRenderer {
     const titleContainer = this.container?.querySelector('#stats-title')?.parentElement;
     if (titleContainer) {
       const buttons = titleContainer.querySelectorAll('button');
-      if (buttons.length >= 2) {
+      // Check if Gnawlin stats are enabled
+      const gnawlinStatsEnabled = this.recorder.getStatConfigs().some(stat => 
+        stat.name.startsWith('gnawlin_') && stat.enabled
+      );
+      
+      if (buttons.length >= 2 && gnawlinStatsEnabled) {
         const prevBtn = buttons[0] as HTMLButtonElement;
         const nextBtn = buttons[1] as HTMLButtonElement;
         
@@ -329,6 +349,13 @@ export class StatsGraphRenderer {
         } else {
           nextBtn.onclick = () => this.switchCreatureType('gnawlin');
         }
+      } else if (buttons.length >= 1) {
+        // Only prev button exists (Gnawlin stats disabled)
+        const prevBtn = buttons[0] as HTMLButtonElement;
+        prevBtn.style.background = '#3498db';
+        prevBtn.style.opacity = '1';
+        prevBtn.style.cursor = 'default';
+        prevBtn.onclick = null;
       }
     }
     
@@ -410,10 +437,13 @@ export class StatsGraphRenderer {
     title.style.cssText = 'color: #fff; margin: 0 0 15px 0;';
     sidebar.appendChild(title);
     
-    // Filter stats by creature type
+    // Filter stats by creature type and enabled status
     const prefix = this.currentCreatureType === 'squibble' ? '' : 'gnawlin_';
     const allStats = this.recorder.getStatConfigs();
     const filteredStats = allStats.filter(stat => {
+      // Only show enabled stats
+      if (!stat.enabled) return false;
+      
       // Squibble stats don't have prefix, Gnawlin stats have 'gnawlin_' prefix
       if (this.currentCreatureType === 'squibble') {
         return !stat.name.startsWith('gnawlin_');

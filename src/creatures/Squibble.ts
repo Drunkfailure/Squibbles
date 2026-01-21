@@ -145,6 +145,7 @@ export class Squibble {
   public alive: boolean = true;
   public age: number = 0; // Age in frames
   public maxAge: number; // Maximum age in frames before death (genetic)
+  public deathCause: 'age' | 'hunger' | 'thirst' | 'predator' | 'drowning' | 'childbirth' | null = null;
   
   // Family tree tracking (using IDs instead of object references)
   public parent1Id: number | null = null; // Mother ID (or first parent ID)
@@ -258,6 +259,7 @@ export class Squibble {
     
     // Die of old age
     if (this.age >= this.maxAge) {
+      this.deathCause = 'age';
       this.alive = false;
       return;
     }
@@ -411,6 +413,17 @@ export class Squibble {
     
     // Die if stats reach 0
     if (this.hunger <= 0 || this.thirst <= 0 || this.health <= 0) {
+      if (this.hunger <= 0) {
+        this.deathCause = 'hunger';
+      } else if (this.thirst <= 0) {
+        this.deathCause = 'thirst';
+      } else {
+        // Health <= 0 could be from various causes, but if hunger/thirst are fine, it's likely from combat
+        // We'll set it as predator if not already set
+        if (!this.deathCause) {
+          this.deathCause = 'predator';
+        }
+      }
       this.alive = false;
       return;
     }
@@ -434,22 +447,25 @@ export class Squibble {
       }
     }
     
-    // Try to eat food if available and (hungry OR thirsty with thirst-restoring food)
+    // Try to eat food if available and (hungry OR thirsty with thirst-restoring food OR need health restoration)
     // Only if not already eating
     if (!this.isEating && foodManager) {
       const isHungry = this.hunger < this.hungerThreshold;
       const isThirsty = this.thirst < 50; // Same threshold as seeking water
+      const needsHealth = this.health < this.maxHealth; // Need health restoration
       
-      // Only try to eat if we actually need food/thirst
-      if (isHungry || isThirsty) {
+      // Only try to eat if we actually need food/thirst/health
+      if (isHungry || isThirsty || needsHealth) {
         const result = foodManager.eatFoodAtPosition(this.x, this.y, this.radius + 5, this.intelligence, this.metabolism);
         if (result && (result.hungerGain > 0 || result.thirstGain > 0)) {
           // Check if this food provides what we need:
           // - If hungry: must provide hunger gain
           // - If thirsty: must provide thirst gain (like cactus)
+          // - If need health: must provide health (all foods except cactus restore health)
           // - If both hungry and thirsty: must provide at least one
           const providesNeededBenefit = (isHungry && result.hungerGain > 0) || 
-                                       (isThirsty && result.thirstGain > 0);
+                                       (isThirsty && result.thirstGain > 0) ||
+                                       (needsHealth && result.species && result.species !== 'cactus');
           
           if (providesNeededBenefit) {
             // Start eating - pause for 5 seconds
@@ -479,8 +495,8 @@ export class Squibble {
       }
     }
     
-    // Check if we need to seek food
-    const seekingFood = this.hunger < this.hungerThreshold;
+    // Check if we need to seek food (hungry OR need health restoration)
+    const seekingFood = this.hunger < this.hungerThreshold || this.health < this.maxHealth;
     
     // Update seekingMate status (re-evaluated every frame)
     // Don't seek mates if already breeding
@@ -599,6 +615,7 @@ export class Squibble {
     
     // Drowning: chance per second = (1 - swim) * 0.02
     if (inWater && waterMap && Math.random() < (1 - this.swim) * 0.02 * dt) {
+      this.deathCause = 'drowning';
       this.alive = false;
       return;
     }
@@ -908,6 +925,7 @@ export class Squibble {
       
       // Check if target died
       if (target.health <= 0) {
+        target.deathCause = 'predator';
         target.alive = false;
         this.endCombat();
       }
@@ -1151,6 +1169,7 @@ export class Squibble {
     // Check if mother dies during childbirth
     if (Math.random() < deathRisk) {
       // Mother dies
+      this.deathCause = 'childbirth';
       this.alive = false;
       // Still give birth to babies before dying
     }

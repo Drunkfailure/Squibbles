@@ -38,6 +38,14 @@ export class StatsRecorder {
     this.registerStat('births', 'Births (cumulative)', '#8BC34A', 'population');
     this.registerStat('deaths', 'Deaths (cumulative)', '#F44336', 'population');
     
+    // Death causes (Squibbles)
+    this.registerStat('deaths_by_age', 'Deaths by Age', '#9E9E9E', 'deaths');
+    this.registerStat('deaths_by_hunger', 'Deaths by Hunger', '#FF5722', 'deaths');
+    this.registerStat('deaths_by_thirst', 'Deaths by Thirst', '#2196F3', 'deaths');
+    this.registerStat('deaths_by_predator', 'Deaths by Predator', '#F44336', 'deaths');
+    this.registerStat('deaths_by_drowning', 'Deaths by Drowning', '#00BCD4', 'deaths');
+    this.registerStat('deaths_by_childbirth', 'Deaths by Childbirth', '#E91E63', 'deaths');
+    
     // Health stats
     this.registerStat('avg_hunger', 'Avg Hunger', '#FF9800', 'health');
     this.registerStat('avg_thirst', 'Avg Thirst', '#2196F3', 'health');
@@ -71,6 +79,12 @@ export class StatsRecorder {
     
     // Gnawlin stats (prefixed with gnawlin_)
     this.registerStat('gnawlin_population', 'Gnawlin Population', '#FF6B6B', 'population');
+    
+    // Death causes (Gnawlins)
+    this.registerStat('gnawlin_deaths_by_age', 'Gnawlin Deaths by Age', '#9E9E9E', 'deaths');
+    this.registerStat('gnawlin_deaths_by_hunger', 'Gnawlin Deaths by Hunger', '#FF5722', 'deaths');
+    this.registerStat('gnawlin_deaths_by_thirst', 'Gnawlin Deaths by Thirst', '#2196F3', 'deaths');
+    this.registerStat('gnawlin_deaths_by_childbirth', 'Gnawlin Deaths by Childbirth', '#E91E63', 'deaths');
     this.registerStat('gnawlin_avg_hunger', 'Gnawlin Avg Hunger', '#FF9800', 'health');
     this.registerStat('gnawlin_avg_thirst', 'Gnawlin Avg Thirst', '#2196F3', 'health');
     this.registerStat('gnawlin_avg_health', 'Gnawlin Avg Health', '#E91E63', 'health');
@@ -113,6 +127,43 @@ export class StatsRecorder {
     const config = this.statConfigs.get(name);
     if (config) {
       config.enabled = enabled;
+    }
+  }
+  
+  /**
+   * Disable all Gnawlin stats (used when no Gnawlins are in the simulation)
+   */
+  disableGnawlinStats(): void {
+    const gnawlinStats = [
+      'gnawlin_population',
+      'gnawlin_deaths_by_age',
+      'gnawlin_deaths_by_hunger',
+      'gnawlin_deaths_by_thirst',
+      'gnawlin_deaths_by_childbirth',
+      'gnawlin_avg_hunger',
+      'gnawlin_avg_thirst',
+      'gnawlin_avg_health',
+      'gnawlin_avg_speed',
+      'gnawlin_avg_vision',
+      'gnawlin_avg_virility',
+      'gnawlin_avg_max_age',
+      'gnawlin_avg_intelligence',
+      'gnawlin_avg_swim',
+      'gnawlin_avg_metabolism',
+      'gnawlin_avg_damage_resistance',
+      'gnawlin_avg_aggressiveness',
+      'gnawlin_avg_damage',
+      'gnawlin_avg_accuracy',
+      'gnawlin_seeking_food_count',
+      'gnawlin_seeking_mate_count',
+      'gnawlin_pregnant_count',
+      'gnawlin_breeding_count',
+      'gnawlin_male_count',
+      'gnawlin_female_count',
+    ];
+    
+    for (const statName of gnawlinStats) {
+      this.setStatEnabled(statName, false);
     }
   }
   
