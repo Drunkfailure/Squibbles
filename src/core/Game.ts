@@ -12,6 +12,13 @@ export interface GameSettings {
   screenHeight: number;
   creatureCount: number;
   gnawlinCount: number;
+  /**
+   * Target total eatable slots after world gen (sum of each food plant's maxSlots).
+   * Spawns are adjusted (trim / extra rolls) to approximate this capacity.
+   */
+  foodCount?: number;
+  /** Same integer reproduces the same terrain; omit for a random world each run. */
+  worldSeed?: number;
   terrain?: {
     biome_scale: number;
     biome_weights: {

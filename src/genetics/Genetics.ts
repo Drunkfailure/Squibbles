@@ -289,6 +289,13 @@ export const POLYGENIC_TRAITS: Record<string, PolygenicTrait> = {
     baseValue: 0.7,
     outputRange: [0.3, 1.0], // 30% to 100% accuracy
   },
+  combatSpeed: {
+    name: 'Combat Speed',
+    lociCount: 4,
+    lociRange: [-0.06, 0.06],
+    baseValue: 1.0,
+    outputRange: [0.55, 1.65], // Multiplier on attack rate; 1.0 = baseline delay; higher = faster strikes
+  },
   awareness: {
     name: 'Awareness',
     lociCount: 5,
@@ -407,6 +414,7 @@ export interface Genome {
     damage: PolygenicGenotype;
       maxHealth: PolygenicGenotype;
       accuracy: PolygenicGenotype;
+      combatSpeed: PolygenicGenotype;
       awareness: PolygenicGenotype; // Squibbles only
     };
   
@@ -463,6 +471,7 @@ export function generateRandomGenome(): Genome {
       damage: randomPolygenicGenotype(POLYGENIC_TRAITS.damage),
       maxHealth: randomPolygenicGenotype(POLYGENIC_TRAITS.maxHealth),
       accuracy: randomPolygenicGenotype(POLYGENIC_TRAITS.accuracy),
+      combatSpeed: randomPolygenicGenotype(POLYGENIC_TRAITS.combatSpeed),
       awareness: randomPolygenicGenotype(POLYGENIC_TRAITS.awareness), // Squibbles only
     },
     multiAllele: {
@@ -509,6 +518,7 @@ export function inheritGenome(
       damage: inheritPolygenic(parent1.polygenic.damage, parent2.polygenic.damage, POLYGENIC_TRAITS.damage, mutationConfig),
       maxHealth: inheritPolygenic(parent1.polygenic.maxHealth, parent2.polygenic.maxHealth, POLYGENIC_TRAITS.maxHealth, mutationConfig),
       accuracy: inheritPolygenic(parent1.polygenic.accuracy, parent2.polygenic.accuracy, POLYGENIC_TRAITS.accuracy, mutationConfig),
+      combatSpeed: inheritPolygenic(parent1.polygenic.combatSpeed, parent2.polygenic.combatSpeed, POLYGENIC_TRAITS.combatSpeed, mutationConfig),
       awareness: inheritPolygenic(parent1.polygenic.awareness, parent2.polygenic.awareness, POLYGENIC_TRAITS.awareness, mutationConfig), // Squibbles only
     },
     multiAllele: {
@@ -550,6 +560,7 @@ export interface ExpressedPhenotypes {
   damage: number;
   maxHealth: number;
   accuracy: number;
+  combatSpeed: number;
   awareness: number; // Squibbles only
   
   // Visual traits (strings)
@@ -587,6 +598,7 @@ export function expressGenome(genome: Genome): ExpressedPhenotypes {
     damage: getPolygenicPhenotype(POLYGENIC_TRAITS.damage, genome.polygenic.damage),
     maxHealth: getPolygenicPhenotype(POLYGENIC_TRAITS.maxHealth, genome.polygenic.maxHealth),
     accuracy: getPolygenicPhenotype(POLYGENIC_TRAITS.accuracy, genome.polygenic.accuracy),
+    combatSpeed: getPolygenicPhenotype(POLYGENIC_TRAITS.combatSpeed, genome.polygenic.combatSpeed),
     awareness: getPolygenicPhenotype(POLYGENIC_TRAITS.awareness, genome.polygenic.awareness), // Squibbles only
     
     hornStyle: getMultiAllelePhenotype(MULTI_ALLELE_TRAITS.hornStyle, genome.multiAllele.hornStyle),

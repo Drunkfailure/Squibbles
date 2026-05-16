@@ -68,12 +68,18 @@ export class Gnawlin {
   // Accuracy (0.3-1.0): Chance to hit in combat
   public accuracy: number;
   
+  // Combat speed (~0.55–1.65): multiplier on attack rate (higher = shorter time between strikes)
+  public combatSpeed: number;
+  
   // Combat state
   public isInCombat: boolean = false;
   public combatTarget: any = null; // Squibble that this is fighting
   public combatTurn: boolean = false; // True if it's this creature's turn to attack
   public combatTimer: number = 0; // Time until next turn (turn-based combat)
-  private combatTurnDuration: number = 1.0; // 1 second per turn
+  private static readonly combatTurnBaseSeconds: number = 1.0;
+  /** Squibbles that joined to help the primary victim (combatTarget). */
+  public combatAssistants: Squibble[] = [];
+  private static readonly maxCombatAssistants: number = 4;
   
   // Wet: after leaving water, slow for 30 seconds
   public wetTimer: number = 0;
@@ -206,6 +212,7 @@ export class Gnawlin {
     this.aggressiveness = phenotypes.aggressiveness;
     this.damage = phenotypes.damage;
     this.accuracy = phenotypes.accuracy;
+    this.combatSpeed = phenotypes.combatSpeed;
     
     // Gnawlins have more health: 200-400 HP (vs 50-200 for Squibbles)
     const baseMaxHealth = 200 + Math.random() * 200; // 200-400 HP
@@ -358,7 +365,7 @@ export class Gnawlin {
       this.combatTimer -= dt;
       if (this.combatTimer <= 0) {
         this.combatTurn = true;
-        this.combatTimer = this.combatTurnDuration;
+        this.combatTimer = this.getCombatTurnInterval();
       }
     }
     
@@ -871,6 +878,10 @@ export class Gnawlin {
     const oldLimit = this.maxAge * 0.8;   // Last 1/5
     return this.age >= youngLimit && this.age <= oldLimit;
   }
+
+  private getCombatTurnInterval(): number {
+    return Gnawlin.combatTurnBaseSeconds / this.combatSpeed;
+  }
   
   /**
    * Start combat with a target
@@ -878,35 +889,54 @@ export class Gnawlin {
   startCombat(target: Squibble): void {
     if (this.isInCombat) return; // Already in combat
     
+    this.combatAssistants = [];
     this.isInCombat = true;
     this.combatTarget = target;
     this.combatTurn = true; // Gnawlin attacks first
-    this.combatTimer = this.combatTurnDuration;
+    this.combatTimer = this.getCombatTurnInterval();
     
     // Also set the Squibble's combat state
     if (!target.isInCombat) {
       target.startCombat(this);
     }
   }
+
+  /**
+   * Another squibble joins against this gnawlin (helps combatTarget).
+   */
+  addCombatAssistant(ally: Squibble): boolean {
+    if (!this.isInCombat || !this.combatTarget || !ally.alive) return false;
+    if (ally === this.combatTarget || this.combatAssistants.includes(ally)) return false;
+    if (ally.isInCombat) return false;
+    if (this.combatAssistants.length >= Gnawlin.maxCombatAssistants) return false;
+    this.combatAssistants.push(ally);
+    ally.joinCombatAsAlly(this);
+    return true;
+  }
+
+  removeCombatAssistant(ally: Squibble): void {
+    const i = this.combatAssistants.indexOf(ally);
+    if (i >= 0) this.combatAssistants.splice(i, 1);
+    ally.clearLocalCombatState();
+  }
   
   /**
    * End combat
    */
   endCombat(): void {
-    if (this.combatTarget) {
-      // Clear target's combat state if it's still pointing to us
-      if (this.combatTarget.combatTarget === this) {
-        this.combatTarget.isInCombat = false;
-        this.combatTarget.combatTarget = null;
-        this.combatTarget.combatTurn = false;
-        this.combatTarget.combatTimer = 0;
-      }
+    const assistants = [...this.combatAssistants];
+    this.combatAssistants = [];
+    for (const s of assistants) {
+      s.clearLocalCombatState();
     }
-    
-    this.isInCombat = false;
+    const primary = this.combatTarget;
     this.combatTarget = null;
+    this.isInCombat = false;
     this.combatTurn = false;
     this.combatTimer = 0;
+    if (primary && primary.alive) {
+      primary.clearLocalCombatState();
+    }
   }
   
   /**
@@ -1010,6 +1040,7 @@ export class Gnawlin {
       aggressiveness: this.aggressiveness,
       damage: this.damage,
       accuracy: this.accuracy,
+      combat_speed: this.combatSpeed,
       virility: this.virility,
       size: this.size,
       litter_size: this.litterSize,

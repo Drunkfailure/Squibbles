@@ -31,18 +31,47 @@ export interface WorldData {
   height: number;
 }
 
+/** Unit-float PRNG stream in [0, 1). */
+export type Rng = () => number;
+
+/** Mulberry32 — deterministic from a 32-bit seed. */
+export function createMulberry32(seed: number): Rng {
+  let state = (seed >>> 0) || 1;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function mix32(seed: number, salt: number): number {
+  return (Math.imul(seed ^ salt, 0x9e3779b1) >>> 0) || 1;
+}
+
+/** Normalize caller seed; if undefined, caller should use resolveWorldSeed first. */
+export function resolveWorldSeed(seed?: number): number {
+  if (seed !== undefined && Number.isFinite(seed)) {
+    const n = Math.trunc(Number(seed));
+    return (n >>> 0) || 1;
+  }
+  return (Math.floor(Math.random() * 0xffffffff) ^ (Date.now() & 0xffffffff)) >>> 0 || 1;
+}
+
 /**
  * Biome adjacency rules for WFC
  * Each biome has a list of biomes that can be adjacent to it
  * Rules are symmetric (if A can be next to B, then B can be next to A)
- * More permissive rules for more organic transitions
+ * Stricter rules yield larger readable biomes (forest/desert never share an edge, etc.).
  */
 const BIOME_ADJACENCY_RULES: Record<Biome, Biome[]> = {
-  [Biome.PLAINS]: [Biome.PLAINS, Biome.FOREST, Biome.DESERT, Biome.TUNDRA, Biome.WATER], // Plains can transition to most biomes
-  [Biome.FOREST]: [Biome.PLAINS, Biome.FOREST, Biome.TUNDRA, Biome.WATER],  // Forest can be next to plains, forest, tundra, water
-  [Biome.DESERT]: [Biome.PLAINS, Biome.DESERT, Biome.WATER],                // Desert can be next to plains, desert, water
-  [Biome.TUNDRA]: [Biome.PLAINS, Biome.FOREST, Biome.TUNDRA, Biome.WATER],  // Tundra can also connect to plains for smoother transitions
-  [Biome.WATER]: [Biome.PLAINS, Biome.FOREST, Biome.DESERT, Biome.TUNDRA, Biome.WATER], // Water can be next to any biome
+  // Stricter edges so regions read as “places”: harsh biomes need plains or water as buffer, not each other.
+  [Biome.PLAINS]: [Biome.PLAINS, Biome.FOREST, Biome.DESERT, Biome.TUNDRA, Biome.WATER],
+  [Biome.FOREST]: [Biome.PLAINS, Biome.FOREST, Biome.TUNDRA, Biome.WATER],
+  [Biome.DESERT]: [Biome.PLAINS, Biome.DESERT, Biome.WATER],
+  [Biome.TUNDRA]: [Biome.PLAINS, Biome.FOREST, Biome.TUNDRA, Biome.WATER],
+  [Biome.WATER]: [Biome.PLAINS, Biome.FOREST, Biome.DESERT, Biome.TUNDRA, Biome.WATER],
 };
 
 /**
@@ -66,10 +95,10 @@ class WFCCell {
   public possibleBiomes: Set<Biome>;
   public collapsed: boolean = false;
   public collapsedBiome: Biome | null = null;
-  public entropy: number;
+  public entropy: number = 0;
   public neighborBiomeWeights: Map<Biome, number> = new Map(); // Track weights from neighboring biomes
   
-  constructor(initialBiomes: Biome[]) {
+  constructor(initialBiomes: Biome[], private readonly rng: Rng) {
     this.possibleBiomes = new Set(initialBiomes);
     this.updateEntropy();
   }
@@ -92,7 +121,7 @@ class WFCCell {
     } else {
       // Entropy = -sum(p * log(p)) where p = 1/count
       // Simplified: log(count) with small random noise to break ties
-      this.entropy = Math.log(count) + Math.random() * 0.0001;
+      this.entropy = Math.log(count) + this.rng() * 0.0001;
     }
   }
   
@@ -129,7 +158,7 @@ class WFCCell {
       // Fallback to first available biome
       this.collapsedBiome = biomes[0];
     } else {
-      let random = Math.random() * totalWeight;
+      let random = this.rng() * totalWeight;
       let selectedBiome = biomes[0];
       
       for (let i = 0; i < biomes.length; i++) {
@@ -170,6 +199,253 @@ class WFCCell {
   }
 }
 
+function forceWaterCell(
+  grid: WFCCell[][],
+  r: number,
+  c: number,
+  minDesertDistGrid: Float32Array,
+  cols: number,
+  coreRadius: number
+): void {
+  if (r < 0 || c < 0 || r >= grid.length || c >= grid[0]!.length) return;
+  if (minDesertDistGrid[r * cols + c] < coreRadius * 0.78) return;
+  const cell = grid[r][c];
+  cell.possibleBiomes = new Set([Biome.WATER]);
+  cell.collapsedBiome = Biome.WATER;
+  cell.collapsed = true;
+  cell.entropy = 0;
+}
+
+/**
+ * River runs along columns (mostly E–W); each slice picks a low-elevation band + gentle meander.
+ */
+function carveValleyRiverAcrossColumns(
+  grid: WFCCell[][],
+  elevation: Float32Array,
+  rows: number,
+  cols: number,
+  worldSeed: number,
+  halfWidth: number,
+  rngRiver: Rng,
+  minDesertDistGrid: Float32Array,
+  coreRadius: number
+): void {
+  const colNoise = generateNoise(cols, 1, 2, 0.65, 1.2, rngRiver);
+  const s = worldSeed % 997;
+  let prevRow = Math.floor(rows * (0.48 + 0.12 * Math.sin(s * 0.07)));
+  prevRow = Math.max(halfWidth, Math.min(rows - 1 - halfWidth, prevRow));
+  const searchRadius = 2 + halfWidth * 2;
+
+  for (let c = 0; c < cols; c++) {
+    const t = cols <= 1 ? 0.5 : c / (cols - 1);
+    const meander =
+      rows *
+      (0.06 * Math.sin(2 * Math.PI * t * 1.5 + (worldSeed % 501) * 0.03) +
+        0.025 * (colNoise[c] - 0.5));
+    let target = Math.round(prevRow + meander);
+    target = Math.max(halfWidth, Math.min(rows - 1 - halfWidth, target));
+
+    let bestRow = target;
+    let bestCost = Infinity;
+    const lo = Math.max(halfWidth, target - searchRadius);
+    const hi = Math.min(rows - 1 - halfWidth, target + searchRadius);
+    for (let r = lo; r <= hi; r++) {
+      let cost = 0;
+      for (let dc = -halfWidth; dc <= halfWidth; dc++) {
+        const cc = Math.max(0, Math.min(cols - 1, c + dc));
+        cost += elevation[r * cols + cc];
+      }
+      cost /= halfWidth * 2 + 1;
+      if (cost < bestCost) {
+        bestCost = cost;
+        bestRow = r;
+      }
+    }
+    prevRow = bestRow;
+
+    for (let dr = -halfWidth; dr <= halfWidth; dr++) {
+      for (let dc = -halfWidth; dc <= halfWidth; dc++) {
+        forceWaterCell(grid, bestRow + dr, c + dc, minDesertDistGrid, cols, coreRadius);
+      }
+    }
+  }
+}
+
+/**
+ * River runs along rows (mostly N–S); same valley bias, perpendicular carve direction.
+ */
+function carveValleyRiverAcrossRows(
+  grid: WFCCell[][],
+  elevation: Float32Array,
+  rows: number,
+  cols: number,
+  worldSeed: number,
+  halfWidth: number,
+  rngRiver: Rng,
+  minDesertDistGrid: Float32Array,
+  coreRadius: number
+): void {
+  const rowNoise = generateNoise(rows, 1, 2, 0.65, 1.2, rngRiver);
+  const s = worldSeed % 997;
+  let prevCol = Math.floor(cols * (0.48 + 0.12 * Math.sin(s * 0.05)));
+  prevCol = Math.max(halfWidth, Math.min(cols - 1 - halfWidth, prevCol));
+  const searchRadius = 2 + halfWidth * 2;
+
+  for (let r = 0; r < rows; r++) {
+    const t = rows <= 1 ? 0.5 : r / (rows - 1);
+    const meander =
+      cols *
+      (0.06 * Math.sin(2 * Math.PI * t * 1.5 + (worldSeed % 501) * 0.03) +
+        0.025 * (rowNoise[r] - 0.5));
+    let target = Math.round(prevCol + meander);
+    target = Math.max(halfWidth, Math.min(cols - 1 - halfWidth, target));
+
+    let bestCol = target;
+    let bestCost = Infinity;
+    const lo = Math.max(halfWidth, target - searchRadius);
+    const hi = Math.min(cols - 1 - halfWidth, target + searchRadius);
+    for (let c = lo; c <= hi; c++) {
+      let cost = 0;
+      for (let dr = -halfWidth; dr <= halfWidth; dr++) {
+        const rr = Math.max(0, Math.min(rows - 1, r + dr));
+        cost += elevation[rr * cols + c];
+      }
+      cost /= halfWidth * 2 + 1;
+      if (cost < bestCost) {
+        bestCost = cost;
+        bestCol = c;
+      }
+    }
+    prevCol = bestCol;
+
+    for (let dr = -halfWidth; dr <= halfWidth; dr++) {
+      for (let dc = -halfWidth; dc <= halfWidth; dc++) {
+        forceWaterCell(grid, r + dr, bestCol + dc, minDesertDistGrid, cols, coreRadius);
+      }
+    }
+  }
+}
+
+/**
+ * Turn wet, low-elevation land bowls into contiguous lakes (mutates grid in place).
+ */
+function growNaturalLakes(
+  grid: Uint8Array,
+  elevation: Float32Array,
+  moisture: Float32Array,
+  rows: number,
+  cols: number,
+  pondChance: number
+): void {
+  const wet = (i: number) => (1.0 - elevation[i]) * 0.6 + moisture[i] * 0.4;
+  const minLake = Math.max(6, Math.floor(Math.min(rows, cols) * 0.045));
+  const maxLake = Math.min(
+    85,
+    Math.max(12, Math.floor(rows * cols * (0.0028 + pondChance * 0.00032)))
+  );
+  const claimed = new Array(rows * cols).fill(false);
+
+  const seeds: { i: number; p: number }[] = [];
+  for (let r = 1; r < rows - 1; r++) {
+    for (let c = 1; c < cols - 1; c++) {
+      const i = r * cols + c;
+      if (grid[i] === Biome.WATER || grid[i] === Biome.DESERT) continue;
+      const e = elevation[i];
+      const eN = elevation[(r - 1) * cols + c];
+      const eS = elevation[(r + 1) * cols + c];
+      const eW = elevation[r * cols + c - 1];
+      const eE = elevation[r * cols + c + 1];
+      const lowestNeighbor = Math.min(eN, eS, eW, eE);
+      if (e > lowestNeighbor + 0.012) continue;
+      const p = wet(i);
+      if (p < 0.58) continue;
+      seeds.push({ i, p });
+    }
+  }
+  seeds.sort((a, b) => b.p - a.p);
+
+  for (const { i: seedIdx } of seeds) {
+    if (claimed[seedIdx] || grid[seedIdx] === Biome.WATER) continue;
+    const seedElev = elevation[seedIdx];
+    const seedP = wet(seedIdx);
+    const floorP = seedP - 0.2;
+    const rimElev = seedElev + 0.11 + (1.0 - pondChance) * 0.06;
+
+    const body: number[] = [];
+    const stack: number[] = [seedIdx];
+    const visited = new Set<number>();
+
+    while (stack.length > 0 && body.length < maxLake) {
+      const i = stack.pop()!;
+      if (visited.has(i)) continue;
+      visited.add(i);
+      if (claimed[i]) continue;
+      if (grid[i] === Biome.WATER) continue;
+      if (grid[i] === Biome.DESERT) continue;
+      if (elevation[i] > rimElev) continue;
+      if (wet(i) < floorP) continue;
+
+      body.push(i);
+      const r = Math.floor(i / cols);
+      const cc = i % cols;
+      for (const [dr, dc] of [[-1, 0], [1, 0], [0, -1], [0, 1]] as const) {
+        const nr = r + dr;
+        const nc = cc + dc;
+        if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
+        stack.push(nr * cols + nc);
+      }
+    }
+
+    if (body.length < minLake) continue;
+    for (const i of body) {
+      grid[i] = Biome.WATER;
+      claimed[i] = true;
+    }
+  }
+}
+
+/**
+ * Remove isolated water in desert (keeps rivers: ≥2 cardinal water neighbors).
+ */
+function pruneDesertAndExcessWater(grid: Uint8Array, rows: number, cols: number): void {
+  const idx = (r: number, c: number) => r * cols + c;
+  const toDesert: number[] = [];
+  
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const i = idx(r, c);
+      if (grid[i] !== Biome.WATER) continue;
+      
+      let desert8 = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const nr = r + dy;
+          const nc = c + dx;
+          if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
+          if (grid[idx(nr, nc)] === Biome.DESERT) desert8++;
+        }
+      }
+      
+      let waterCardinal = 0;
+      for (const [dr, dc] of [[-1, 0], [1, 0], [0, -1], [0, 1]] as const) {
+        const nr = r + dr;
+        const nc = c + dc;
+        if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
+        if (grid[idx(nr, nc)] === Biome.WATER) waterCardinal++;
+      }
+      
+      if (desert8 >= 5 && waterCardinal <= 1) {
+        toDesert.push(i);
+      }
+    }
+  }
+  
+  for (const i of toDesert) {
+    grid[i] = Biome.DESERT;
+  }
+}
+
 /**
  * Wave Function Collapse algorithm for terrain generation
  */
@@ -177,10 +453,28 @@ async function generateWithWFC(
   rows: number,
   cols: number,
   biomeWeights: Map<Biome, number>,
-  seed?: number,
+  worldSeed: number,
   settings?: TerrainSettings,
   onProgress?: (progress: number, message: string) => void
 ): Promise<Uint8Array> {
+  /** Split streams so rivers / smoothing do not reshuffle unrelated noise. */
+  const rngElev = createMulberry32(mix32(worldSeed, 0xa11));
+  const rngMoist = createMulberry32(mix32(worldSeed, 0xa22));
+  const rngWfc = createMulberry32(mix32(worldSeed, 0xa33));
+  const rngRiver = createMulberry32(mix32(worldSeed, 0xa44));
+  const rngRiver2 = createMulberry32(mix32(worldSeed, 0xa55));
+  const rngSmooth = createMulberry32(mix32(worldSeed, 0xa66));
+
+  /** Higher = fewer, larger extreme-biome cores and heavier post-smoothing (more cohesive continents). */
+  const biomeScale = Math.max(1, Math.min(12, settings?.biome_scale ?? 4));
+  const dim = Math.min(rows, cols);
+  const maxRadius = dim * (0.34 + 0.02 * Math.min(biomeScale, 10));
+  const coreRadius = dim * (0.09 + 0.01 * Math.min(biomeScale, 10));
+  const smoothPasses = 1 + Math.min(2, Math.floor(biomeScale / 4));
+  const islandMinTiles = Math.max(5, Math.floor(dim * (0.055 + 0.012 * biomeScale)));
+  const collapsePersistence = 1.35 + biomeScale * 0.045;
+  const entropyBand = 1.0 + 0.12 * (12 / biomeScale);
+  
   // Initialize all cells with all possible biomes (superposition)
   // Water will be added later based on water potential
   const allBiomes = [Biome.PLAINS, Biome.FOREST, Biome.DESERT, Biome.TUNDRA, Biome.WATER];
@@ -189,7 +483,7 @@ async function generateWithWFC(
   for (let r = 0; r < rows; r++) {
     grid[r] = [];
     for (let c = 0; c < cols; c++) {
-      grid[r][c] = new WFCCell(allBiomes);
+      grid[r][c] = new WFCCell(allBiomes, rngWfc);
     }
   }
   
@@ -197,27 +491,29 @@ async function generateWithWFC(
   const tundraSeeds: Array<{ r: number; c: number }> = [];
   const desertSeeds: Array<{ r: number; c: number }> = [];
   
-  // Generate 2-4 seed points for each to create more varied regions
-  const numTundraSeeds = 2 + Math.floor(Math.random() * 3); // 2-4 seeds
-  const numDesertSeeds = 2 + Math.floor(Math.random() * 3); // 2-4 seeds
+  // Fewer seeds at higher biome_scale → larger, clearer regions instead of scattered patches
+  const numExtremeSeeds = Math.max(1, 5 - Math.floor(biomeScale / 3));
+  const numTundraSeeds = numExtremeSeeds;
+  const numDesertSeeds = numExtremeSeeds;
   
   for (let i = 0; i < numTundraSeeds; i++) {
     tundraSeeds.push({
-      r: Math.floor(rows * (0.1 + Math.random() * 0.4)), // Upper portion, more spread
-      c: Math.floor(cols * (0.2 + Math.random() * 0.6)),
+      r: Math.floor(rows * (0.1 + rngWfc() * 0.4)), // Upper portion, more spread
+      c: Math.floor(cols * (0.2 + rngWfc() * 0.6)),
     });
   }
   
   for (let i = 0; i < numDesertSeeds; i++) {
     desertSeeds.push({
-      r: Math.floor(rows * (0.4 + Math.random() * 0.4)), // Lower portion, more spread
-      c: Math.floor(cols * (0.2 + Math.random() * 0.6)),
+      r: Math.floor(rows * (0.4 + rngWfc() * 0.4)), // Lower portion, more spread
+      c: Math.floor(cols * (0.2 + rngWfc() * 0.6)),
     });
   }
   
   // Calculate distance-based weights for seeded biomes
   const tundraDistanceWeights: number[][] = [];
   const desertDistanceWeights: number[][] = [];
+  const minDesertDistGrid = new Float32Array(rows * cols);
   
   for (let r = 0; r < rows; r++) {
     tundraDistanceWeights[r] = [];
@@ -225,22 +521,19 @@ async function generateWithWFC(
     for (let c = 0; c < cols; c++) {
       // Find minimum distance to any tundra seed
       let minTundraDist = Infinity;
-      for (const seed of tundraSeeds) {
-        const dist = Math.sqrt((r - seed.r) ** 2 + (c - seed.c) ** 2);
+      for (const pos of tundraSeeds) {
+        const dist = Math.sqrt((r - pos.r) ** 2 + (c - pos.c) ** 2);
         minTundraDist = Math.min(minTundraDist, dist);
       }
       
       // Find minimum distance to any desert seed
       let minDesertDist = Infinity;
-      for (const seed of desertSeeds) {
-        const dist = Math.sqrt((r - seed.r) ** 2 + (c - seed.c) ** 2);
+      for (const pos of desertSeeds) {
+        const dist = Math.sqrt((r - pos.r) ** 2 + (c - pos.c) ** 2);
         minDesertDist = Math.min(minDesertDist, dist);
       }
       
-      // Weight decreases with distance, but outer edges can be overtaken
-      // Max influence radius: ~40% of map size (larger for more organic spread)
-      const maxRadius = Math.min(rows, cols) * 0.4;
-      // Use smoother falloff curve for more organic shapes
+      // Weight decreases with distance; maxRadius/coreRadius scale with biome_scale (outer scope)
       const tundraWeight = minTundraDist < maxRadius 
         ? Math.pow(1.0 - minTundraDist / maxRadius, 1.5) 
         : 0;
@@ -250,6 +543,7 @@ async function generateWithWFC(
       
       tundraDistanceWeights[r][c] = tundraWeight;
       desertDistanceWeights[r][c] = desertWeight;
+      minDesertDistGrid[r * cols + c] = minDesertDist;
       
       // Add initial weights to cells based on distance
       if (tundraWeight > 0.1) {
@@ -260,8 +554,6 @@ async function generateWithWFC(
       }
       
       // Protect desert/tundra centers - remove other biomes from core areas
-      // Core radius: ~12% of map size (smaller for more organic boundaries)
-      const coreRadius = Math.min(rows, cols) * 0.12;
       
       // Protect tundra core
       if (minTundraDist < coreRadius) {
@@ -299,8 +591,8 @@ async function generateWithWFC(
   }
   
   // Generate elevation and moisture for water placement
-  const elevation = generateNoise(cols, rows, 3, 0.55, 1.8);
-  const moisture = generateNoise(cols, rows, 3, 0.55, 1.8);
+  const elevation = generateNoise(cols, rows, 3, 0.55, 1.8, rngElev);
+  const moisture = generateNoise(cols, rows, 3, 0.55, 1.8, rngMoist);
   
   // Add water potential to cells (water can spawn in low elevation + high moisture areas)
   // Create larger, more organic water bodies
@@ -317,8 +609,11 @@ async function generateWithWFC(
       const waterPotential = (1.0 - elevation[idx]) * 0.6 + moisture[idx] * 0.4;
       waterPotentialMap[r][c] = waterPotential;
       
-      // Collect high potential cells as water seeds (higher threshold)
-      if (waterPotential > 0.8) { // Higher threshold for fewer seeds
+      const dDesert = minDesertDistGrid[idx];
+      if (
+        waterPotential > 0.87 &&
+        dDesert >= coreRadius * 1.35
+      ) {
         waterSeeds.push({ r, c, potential: waterPotential });
       }
     }
@@ -326,13 +621,13 @@ async function generateWithWFC(
   
   // Sort seeds by potential and take top candidates (fewer seeds)
   waterSeeds.sort((a, b) => b.potential - a.potential);
-  const numWaterSeeds = Math.min(waterSeeds.length, Math.floor((rows * cols) * pondChance * 0.03)); // ~3% of target water as seeds (reduced)
+  const numWaterSeeds = Math.min(waterSeeds.length, Math.floor((rows * cols) * pondChance * 0.012));
   
   // Seed some water cells directly (like desert/tundra) - only very high potential ones
   for (let i = 0; i < numWaterSeeds; i++) {
     const seed = waterSeeds[i];
     // Only seed if potential is very high (>0.85)
-    if (seed.potential > 0.85) {
+    if (seed.potential > 0.91 && minDesertDistGrid[seed.r * cols + seed.c] >= coreRadius * 1.2) {
       const cell = grid[seed.r][seed.c];
       if (!cell.collapsed) {
         cell.collapsedBiome = Biome.WATER;
@@ -349,8 +644,17 @@ async function generateWithWFC(
       const idx = r * cols + c;
       const waterPotential = waterPotentialMap[r][c];
       const cell = grid[r][c];
+      const dDesert = minDesertDistGrid[idx];
       
-      // Skip if already collapsed
+      // Dry bands: suppress WATER option under strong desert influence (non-collapsed cells only)
+      if (!cell.collapsed && dDesert < coreRadius * 1.55) {
+        const cur0 = Array.from(cell.possibleBiomes);
+        if (cur0.includes(Biome.WATER) && cur0.length > 1) {
+          cell.possibleBiomes = new Set(cur0.filter(b => b !== Biome.WATER));
+          cell.updateEntropy();
+        }
+      }
+      
       if (cell.collapsed) continue;
       
       // Check neighbors to see if we're in a water cluster
@@ -364,7 +668,7 @@ async function generateWithWFC(
             const neighborCell = grid[ny][nx];
             if (neighborCell.collapsed && neighborCell.collapsedBiome === Biome.WATER) {
               neighborWaterCount++;
-            } else if (waterPotentialMap[ny][nx] > 0.65) {
+            } else if (waterPotentialMap[ny][nx] > 0.72) {
               neighborWaterCount++;
             }
           }
@@ -372,12 +676,11 @@ async function generateWithWFC(
       }
       
       // If high water potential OR in a cluster of water, boost water weight (reduced)
-      if (waterPotential > 0.75 || neighborWaterCount >= 3) {
-        // Moderate weight boost for water
-        const clusterBoost = neighborWaterCount >= 3 ? 2.0 : 1.0;
-        const potentialBoost = waterPotential > 0.85 ? 1.5 : 1.0;
-        cell.addNeighborWeight(Biome.WATER, waterPotential * 2.5 * clusterBoost * potentialBoost);
-      } else if (waterPotential < 0.5) {
+      if (waterPotential > 0.82 || neighborWaterCount >= 4) {
+        const clusterBoost = neighborWaterCount >= 4 ? 1.65 : 1.0;
+        const potentialBoost = waterPotential > 0.9 ? 1.35 : 1.0;
+        cell.addNeighborWeight(Biome.WATER, waterPotential * 2.0 * clusterBoost * potentialBoost);
+      } else if (waterPotential < 0.55) {
         // Remove water from very low potential areas (but keep it if in protected core areas)
         const current = Array.from(cell.possibleBiomes);
         if (current.includes(Biome.WATER) && current.length > 1) {
@@ -425,38 +728,76 @@ async function generateWithWFC(
     }
   }
   
-  // Generate river seeds
+  // Meandering river locked to elevation valleys (reads natural against cohesive biomes)
   const riverChance = settings?.river_chance ? settings.river_chance / 100.0 : 0.6;
-  if (Math.random() < riverChance) {
-    const riverNoise = generateNoise(cols, 1, 2, 0.7, 1.0);
-    const riverWidthTiles = settings?.river_width && settings.river_width > 0 
-      ? settings.river_width 
-      : Math.max(1, Math.floor((rows / 32) / 120));
+  if (rngRiver() < riverChance) {
+    const dimAxis = Math.min(rows, cols);
+    const riverWidthTiles =
+      settings?.river_width && settings.river_width > 0
+        ? settings.river_width
+        : Math.max(1, Math.floor(dimAxis * 0.014));
     const halfWidth = Math.max(1, riverWidthTiles);
-    
-    for (let c = 0; c < cols; c++) {
-      const t = c / (cols - 1);
-      let riverCenter = 0.5 + 0.10 * Math.sin(2.0 * Math.PI * (t * 1.0 + (seed || 0) * 0.01));
-      riverCenter += 0.05 * (riverNoise[c] - 0.5);
-      const centerRow = Math.floor(riverCenter * (rows - 1));
-      
-      const r0 = Math.max(0, centerRow - halfWidth);
-      const r1 = Math.min(rows - 1, centerRow + halfWidth);
-      
-      for (let r = r0; r <= r1; r++) {
-        // Force water in river path (overrides protected cores)
-        const cell = grid[r][c];
-        cell.possibleBiomes = new Set([Biome.WATER]);
-        cell.collapsedBiome = Biome.WATER;
-        cell.collapsed = true;
-        cell.entropy = 0;
+    const flowNorthSouth = rngRiver() < 0.5;
+    if (flowNorthSouth) {
+      carveValleyRiverAcrossColumns(
+        grid,
+        elevation,
+        rows,
+        cols,
+        worldSeed,
+        halfWidth,
+        rngRiver,
+        minDesertDistGrid,
+        coreRadius
+      );
+    } else {
+      carveValleyRiverAcrossRows(
+        grid,
+        elevation,
+        rows,
+        cols,
+        worldSeed,
+        halfWidth,
+        rngRiver,
+        minDesertDistGrid,
+        coreRadius
+      );
+    }
+    // Second, thinner channel (often perpendicular) — tributary / braided feel, scales with river_chance
+    if (rngRiver() < riverChance * 0.22) {
+      const halfTrib = Math.max(1, Math.floor(halfWidth * 0.58));
+      const altSeed = (worldSeed ^ 0x5eef5eed) >>> 0;
+      if (flowNorthSouth) {
+        carveValleyRiverAcrossRows(
+          grid,
+          elevation,
+          rows,
+          cols,
+          altSeed,
+          halfTrib,
+          rngRiver2,
+          minDesertDistGrid,
+          coreRadius
+        );
+      } else {
+        carveValleyRiverAcrossColumns(
+          grid,
+          elevation,
+          rows,
+          cols,
+          altSeed,
+          halfTrib,
+          rngRiver2,
+          minDesertDistGrid,
+          coreRadius
+        );
       }
     }
   }
   
   // Seed initial tundra and desert cells
-  for (const seed of tundraSeeds) {
-    const cell = grid[seed.r][seed.c];
+  for (const pos of tundraSeeds) {
+    const cell = grid[pos.r][pos.c];
     if (!cell.collapsed) {
       cell.collapsedBiome = Biome.TUNDRA;
       cell.possibleBiomes = new Set([Biome.TUNDRA]);
@@ -465,8 +806,8 @@ async function generateWithWFC(
     }
   }
   
-  for (const seed of desertSeeds) {
-    const cell = grid[seed.r][seed.c];
+  for (const pos of desertSeeds) {
+    const cell = grid[pos.r][pos.c];
     if (!cell.collapsed) {
       cell.collapsedBiome = Biome.DESERT;
       cell.possibleBiomes = new Set([Biome.DESERT]);
@@ -561,10 +902,10 @@ async function generateWithWFC(
     }
     
     // Select from cells with entropy within 10% of minimum (adds variation)
-    const threshold = minEntropy * 1.1;
+    const threshold = minEntropy * entropyBand;
     const validCandidates = candidates.filter(c => c.entropy <= threshold);
     const minCell = validCandidates.length > 0 
-      ? validCandidates[Math.floor(Math.random() * validCandidates.length)]
+      ? validCandidates[Math.floor(rngWfc() * validCandidates.length)]
       : null;
     
     // If no cell found, break (shouldn't happen)
@@ -575,7 +916,7 @@ async function generateWithWFC(
     // Collapse the selected cell
     const cell = grid[minCell.r][minCell.c];
     // Use slightly lower persistence (1.5x) for more organic variation
-    cell.collapse(biomeWeights, 1.5); // 1.5 = same biome neighbors get 1.5x weight
+    cell.collapse(biomeWeights, collapsePersistence);
     collapsedCount++;
     
     // Propagate constraints to neighbors
@@ -616,7 +957,7 @@ async function generateWithWFC(
         if (wasModified) {
           // If neighbor collapsed (only one possibility left), add to queue
           if (neighborCell.possibleBiomes.size === 1) {
-            neighborCell.collapse(biomeWeights, 1.5);
+            neighborCell.collapse(biomeWeights, collapsePersistence);
             collapsedCount++;
           }
           
@@ -628,16 +969,16 @@ async function generateWithWFC(
   }
   
   // Convert to output format
-  let result = new Uint8Array(rows * cols);
+  const raw = new Uint8Array(rows * cols);
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       const cell = grid[r][c];
+      const idx = r * cols + c;
       if (cell.collapsed && cell.collapsedBiome) {
-        result[r * cols + c] = cell.collapsedBiome;
+        raw[idx] = cell.collapsedBiome;
       } else {
-        // Fallback: pick first available biome
         const biomes = Array.from(cell.possibleBiomes);
-        result[r * cols + c] = biomes.length > 0 ? biomes[0] : Biome.PLAINS;
+        raw[idx] = biomes.length > 0 ? biomes[0] : Biome.PLAINS;
       }
     }
   }
@@ -647,14 +988,96 @@ async function generateWithWFC(
     await new Promise(resolve => setTimeout(resolve, 0));
   }
   
-  // Post-processing: Smooth edges for more organic look
-  result = smoothBiomeEdges(result, rows, cols);
+  // Post-processing: merge land clumps, fill plausible lake basins, then final smooth
+  let work = new Uint8Array(smoothBiomeEdges(raw, rows, cols, smoothPasses, rngSmooth));
+  work = new Uint8Array(mergeSmallLandRegions(work, rows, cols, islandMinTiles));
+  growNaturalLakes(work, elevation, moisture, rows, cols, pondChance);
+  work = new Uint8Array(smoothBiomeEdges(work, rows, cols, 1, rngSmooth));
+  pruneDesertAndExcessWater(work, rows, cols);
   
   if (onProgress) {
     onProgress(95, 'Finalizing terrain...');
     await new Promise(resolve => setTimeout(resolve, 0));
   }
   
+  return work;
+}
+
+/**
+ * Remove tiny same-biome blobs (except water) by absorbing them into a neighboring biome
+ * that is adjacency-legal with every surrounding tile—stops “checkerboard” scraps.
+ */
+function mergeSmallLandRegions(grid: Uint8Array, rows: number, cols: number, minSize: number): Uint8Array {
+  const result = new Uint8Array(grid);
+  const seen = new Array(rows * cols).fill(false);
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const start = r * cols + c;
+      if (seen[start] || result[start] === Biome.WATER) continue;
+
+      const biome = result[start];
+      const q: { r: number; c: number }[] = [{ r, c }];
+      const cellIndices: number[] = [];
+      const cellSet = new Set<number>();
+      seen[start] = true;
+
+      while (q.length > 0) {
+        const cur = q.shift()!;
+        const i = cur.r * cols + cur.c;
+        cellIndices.push(i);
+        cellSet.add(i);
+        for (const [dr, dc] of [[-1, 0], [1, 0], [0, -1], [0, 1]] as const) {
+          const nr = cur.r + dr;
+          const nc = cur.c + dc;
+          if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
+          const ni = nr * cols + nc;
+          if (seen[ni]) continue;
+          if (result[ni] !== biome) continue;
+          seen[ni] = true;
+          q.push({ r: nr, c: nc });
+        }
+      }
+
+      if (cellIndices.length >= minSize) continue;
+
+      const extCounts = new Map<Biome, number>();
+      for (const i of cellIndices) {
+        const cr = Math.floor(i / cols);
+        const cc = i % cols;
+        for (const [dr, dc] of [[-1, 0], [1, 0], [0, -1], [0, 1]] as const) {
+          const nr = cr + dr;
+          const nc = cc + dc;
+          if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
+          const ni = nr * cols + nc;
+          if (cellSet.has(ni)) continue;
+          const nb = result[ni];
+          extCounts.set(nb, (extCounts.get(nb) || 0) + 1);
+        }
+      }
+
+      const externalTypes = [...new Set(extCounts.keys())];
+      const landCandidates: Biome[] = [Biome.PLAINS, Biome.FOREST, Biome.DESERT, Biome.TUNDRA];
+      let best: Biome = Biome.PLAINS;
+      let bestScore = -1;
+
+      for (const cand of landCandidates) {
+        if (!externalTypes.every(e => canBeAdjacent(cand, e))) continue;
+        const score = externalTypes.reduce((s, e) => s + (extCounts.get(e) || 0), 0);
+        if (score > bestScore) {
+          bestScore = score;
+          best = cand;
+        }
+      }
+
+      if (bestScore < 0) continue;
+
+      for (const i of cellIndices) {
+        result[i] = best;
+      }
+    }
+  }
+
   return result;
 }
 
@@ -662,7 +1085,13 @@ async function generateWithWFC(
  * Smooth biome edges using majority filter with some randomness
  * Creates more organic boundaries
  */
-function smoothBiomeEdges(grid: Uint8Array, rows: number, cols: number, iterations: number = 1): Uint8Array {
+function smoothBiomeEdges(
+  grid: Uint8Array,
+  rows: number,
+  cols: number,
+  iterations: number = 1,
+  rng: Rng
+): Uint8Array {
   let result = new Uint8Array(grid);
   
   for (let iter = 0; iter < iterations; iter++) {
@@ -672,6 +1101,12 @@ function smoothBiomeEdges(grid: Uint8Array, rows: number, cols: number, iteratio
       for (let c = 0; c < cols; c++) {
         const idx = r * cols + c;
         const currentBiome = result[idx];
+        
+        // Never erase water with land majority — keeps lakes/rivers from dissolving in land smoothing
+        if (currentBiome === Biome.WATER) {
+          newGrid[idx] = Biome.WATER;
+          continue;
+        }
         
         // Count neighbors of each biome
         const counts = new Map<Biome, number>();
@@ -708,7 +1143,7 @@ function smoothBiomeEdges(grid: Uint8Array, rows: number, cols: number, iteratio
           
           // Change if dominant biome has at least 5 neighbors (out of 8)
           // And add some randomness (70% chance) to avoid rigid patterns
-          if (dominantBiome !== currentBiome && maxCount >= 5 && Math.random() < 0.7) {
+          if (dominantBiome !== currentBiome && maxCount >= 5 && rng() < 0.7) {
             // Check if the change is allowed by adjacency rules
             if (canBeAdjacent(currentBiome, dominantBiome)) {
               newGrid[idx] = dominantBiome;
@@ -732,11 +1167,12 @@ function generateNoise(
   height: number,
   octaves: number = 3,
   persistence: number = 0.5,
-  lacunarity: number = 2.0
+  lacunarity: number = 2.0,
+  rng: Rng
 ): Float32Array {
   const noise = new Float32Array(width * height);
   for (let i = 0; i < noise.length; i++) {
-    noise[i] = Math.random();
+    noise[i] = rng();
   }
   
   const result = new Float32Array(width * height);
@@ -879,7 +1315,9 @@ function generateLakes(
 }
 
 /**
- * Main world generation function using Wave Function Collapse
+ * Main world generation function using Wave Function Collapse.
+ *
+ * @param seed World terrain seed (same value + map settings ⇒ same rivers/biomes). Omitted ⇒ random; check console for the chosen value.
  */
 export async function generateWorld(
   width: number,
@@ -888,8 +1326,11 @@ export async function generateWorld(
   seed?: number,
   onProgress?: (progress: number, message: string) => void
 ): Promise<WorldData> {
+  const worldSeed = resolveWorldSeed(seed);
+  console.log('World seed:', worldSeed, '(set this in the title screen to reproduce the same terrain)');
+
   const s = settings || {
-    biome_scale: 4,
+    biome_scale: 6,
     biome_weights: { plains: 40, forest: 25, desert: 20, tundra: 15 },
     pond_chance: 20.0,
     river_chance: 60.0,
@@ -902,8 +1343,8 @@ export async function generateWorld(
   const cols = Math.max(1, Math.floor(width / tileSize));
   
   // Prepare biome weights (including water)
-  // Water weight is derived from pond_chance
-  const waterWeight = s.pond_chance / 100.0; // Use pond_chance directly, no boost
+  // Cap and scale water vs pond_chance — raw pond_chance was producing excessive WATER tiles.
+  const waterWeight = Math.min(0.11, (s.pond_chance / 100.0) * 0.42);
   const landWeight = 1.0 - waterWeight;
   const totalLandWeight = Math.max(1, s.biome_weights.plains + s.biome_weights.forest + 
     s.biome_weights.desert + s.biome_weights.tundra);
@@ -922,7 +1363,7 @@ export async function generateWorld(
     onProgress(0, 'Preparing world generation...');
     await new Promise(resolve => setTimeout(resolve, 0));
   }
-  const biomeGrid = await generateWithWFC(rows, cols, biomeWeights, seed, s, onProgress);
+  const biomeGrid = await generateWithWFC(rows, cols, biomeWeights, worldSeed, s, onProgress);
   
   // Generate water mask from biome grid (water is now part of biomes)
   const waterMask = new Array(rows * cols).fill(false);

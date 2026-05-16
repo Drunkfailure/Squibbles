@@ -4,6 +4,7 @@
 
 import { createChart, Data, Datum } from 'family-chart';
 import 'family-chart/styles/family-chart.css';
+import { select, zoomTransform } from 'd3';
 import { Squibble } from '../creatures/Squibble';
 import { Gnawlin } from '../creatures/Gnawlin';
 import { FontLoader } from '../utils/FontLoader';
@@ -12,6 +13,10 @@ import { FontLoader } from '../utils/FontLoader';
 type Creature = Squibble | Gnawlin;
 
 export class FamilyTree {
+  /** Max generations up (ancestors) or down (descendants) from the focused creature */
+  private static readonly MAX_TREE_DEPTH = 10;
+  private static readonly DEBUG_TREE = false;
+
   private container: HTMLDivElement | null = null;
   private isVisible: boolean = false;
   private chart: any = null; // Chart instance from family-chart
@@ -19,6 +24,8 @@ export class FamilyTree {
   private onCreatureSelect: ((creature: Creature) => void) | null = null;
   private allCreatures: Creature[] = [];
   private creatureMap: Map<number, Creature> = new Map(); // Map ID to Creature
+  private linkObserver: MutationObserver | null = null;
+  private chartAreaResizeObserver: ResizeObserver | null = null;
 
   /**
    * Show the family tree for a selected creature (Squibble or Gnawlin)
@@ -47,6 +54,14 @@ export class FamilyTree {
    */
   hide(): void {
     this.isVisible = false;
+    if (this.linkObserver) {
+      this.linkObserver.disconnect();
+      this.linkObserver = null;
+    }
+    if (this.chartAreaResizeObserver) {
+      this.chartAreaResizeObserver.disconnect();
+      this.chartAreaResizeObserver = null;
+    }
     if (this.container) {
       document.body.removeChild(this.container);
       // Remove backdrop if it exists
@@ -123,10 +138,20 @@ export class FamilyTree {
       align-items: center;
     `;
 
+    const headerLeft = document.createElement('div');
+    headerLeft.style.cssText = 'display: flex; flex-direction: column; align-items: flex-start; flex: 1; min-width: 0;';
+
     const title = document.createElement('h2');
     title.textContent = 'Family Tree';
     title.style.cssText = 'margin: 0; color: #ecf0f1;';
-    header.appendChild(title);
+    headerLeft.appendChild(title);
+
+    const subtitle = document.createElement('p');
+    subtitle.id = 'family-tree-subtitle';
+    subtitle.style.cssText = 'margin: 8px 0 0 0; font-size: 12px; color: #95a5a6;';
+    headerLeft.appendChild(subtitle);
+
+    header.appendChild(headerLeft);
 
     const closeBtn = document.createElement('button');
     closeBtn.textContent = 'Close (ESC)';
@@ -169,6 +194,7 @@ export class FamilyTree {
       const style = document.createElement('style');
       style.id = styleId;
       style.textContent = `
+        /* Keep the tree inside #family-tree-chart; pan limits are applied via d3 zoom translateExtent */
         #family-tree-chart svg path.link,
         #family-tree-chart svg line.link,
         #family-tree-chart svg .link {
@@ -215,15 +241,27 @@ export class FamilyTree {
 
     // Build family tree data
     const data = this.buildFamilyTreeData(this.selectedCreature);
-    
-                console.log('Family tree debug:', {
-                  rootId: this.selectedCreature.id,
-                  allCreaturesCount: this.allCreatures.length,
-                  dataLength: data.length,
-                  hasParents: this.selectedCreature.parent1Id !== null || this.selectedCreature.parent2Id !== null,
-                  childrenCount: this.allCreatures.filter(c => c.parent1Id === this.selectedCreature!.id || c.parent2Id === this.selectedCreature!.id).length
-                });
-    
+
+    const subtitleEl = document.getElementById('family-tree-subtitle');
+    if (subtitleEl) {
+      const sq = this.allCreatures.filter(c => !(c instanceof Gnawlin));
+      const gn = this.allCreatures.filter(c => c instanceof Gnawlin);
+      const alive = this.allCreatures.filter(c => c.alive).length;
+      const focusLabel =
+        this.selectedCreature instanceof Gnawlin
+          ? `Gnawlin #${this.selectedCreature.id}`
+          : `Squibble #${this.selectedCreature.id}`;
+      subtitleEl.textContent = `${data.length} in this view · Focus: ${focusLabel} · Archive: ${sq.length} squibbles, ${gn.length} gnawlins (${alive} alive)`;
+    }
+
+    if (FamilyTree.DEBUG_TREE) {
+      console.log('Family tree debug:', {
+        rootId: this.selectedCreature.id,
+        allCreaturesCount: this.allCreatures.length,
+        dataLength: data.length,
+      });
+    }
+
     if (data.length === 0) {
       chartContainer.innerHTML = `
                     <div style="display: flex; align-items: center; justify-content: center; height: 100%; color: #999;">
@@ -238,16 +276,14 @@ export class FamilyTree {
 
     // Initialize family-chart
     try {
-      console.log('Creating chart with data:', data);
-      console.log('Chart container:', chartContainer, 'Dimensions:', chartContainer.offsetWidth, chartContainer.offsetHeight);
-      
+      if (FamilyTree.DEBUG_TREE) {
+        console.log('Creating chart with data:', data);
+      }
+
       this.chart = createChart(chartContainer, data);
-      console.log('Chart created:', this.chart);
-      console.log('Chart container after creation:', chartContainer.innerHTML.substring(0, 200));
-      
+
       // Set the main person (root creature) - center the tree on this creature
       this.chart.updateMainId(this.selectedCreature.id.toString());
-      console.log('Main ID set to:', this.selectedCreature.id.toString());
       
       // Set up HTML card with custom rendering
       const cardHtml = this.chart.setCardHtml();
@@ -267,118 +303,113 @@ export class FamilyTree {
       // Set custom inner HTML creator for full control
       // This completely replaces the default card rendering
       cardHtml.setCardInnerHtmlCreator((d: any) => {
-        // TreeDatum has data.id, not d.id directly
         const id = d.data?.id || d.id;
         if (!id) {
           console.warn('No ID found in card data:', d);
           return '';
         }
-        
-        const creatureId = typeof id === 'string' ? parseInt(id) : id;
+
+        if (d.data?.isPlaceholder) {
+          return this.renderPlaceholderCard(d);
+        }
+
+        const creatureId = typeof id === 'string' ? parseInt(id, 10) : id;
         const creature = this.creatureMap.get(creatureId);
         if (!creature) {
-          console.warn('Creature not found for ID:', creatureId, 'Available IDs:', Array.from(this.creatureMap.keys()));
-          return '';
+          console.warn('Creature not found for ID:', creatureId);
+          return this.renderMissingRecordCard(typeof id === 'string' ? id : String(id));
         }
         return this.renderCard(creature, d);
       });
       
       // Set click handler - clicking on a portrait shows their stats in a popup
       cardHtml.setOnCardClick((e: MouseEvent, d: any) => {
-        // TreeDatum has data.id, not d.id directly
         const id = d.data?.id || d.id;
-        if (!id) {
-          console.warn('No ID found in clicked card:', d);
+        if (!id || d.data?.isPlaceholder) {
           return;
         }
-        
-        const creatureId = typeof id === 'string' ? parseInt(id) : id;
+
+        const creatureId = typeof id === 'string' ? parseInt(id, 10) : id;
         const creature = this.creatureMap.get(creatureId);
         if (creature) {
           this.showStatsPopup(creature);
         }
       });
-      
-      // Log relationship data for debugging
-      console.log('Family tree relationships:', data.map(d => ({
-        id: d.id,
-        name: d.data.name,
-        parents: d.rels.parents.length,
-        children: d.rels.children.length,
-        spouses: d.rels.spouses.length,
-        spousesIds: d.rels.spouses
-      })));
-      
+
+      if (FamilyTree.DEBUG_TREE) {
+        console.log(
+          'Family tree relationships:',
+          data.map((datum) => ({
+            id: datum.id,
+            name: datum.data.name,
+            parents: datum.rels.parents.length,
+            children: datum.rels.children.length,
+            spouses: datum.rels.spouses.length,
+          }))
+        );
+      }
+
+      const chartEl = chartContainer as HTMLElement;
+      this.chart.afterUpdate = () => {
+        this.clampFamilyTreePanZoom(chartEl);
+      };
+
       // Update the tree (center on the root creature)
-      console.log('Updating tree...');
-      this.chart.updateTree({ 
+      this.chart.updateTree({
         initial: true,
-        tree_position: 'main_to_middle'
+        tree_position: 'main_to_middle',
       });
-      console.log('Tree updated');
-      
-      // Set up monitoring to ensure lines stay visible during pan/zoom
-      // This fixes the issue where lines disappear when dragging
+
+      if (this.chartAreaResizeObserver) {
+        this.chartAreaResizeObserver.disconnect();
+      }
+      this.chartAreaResizeObserver = new ResizeObserver(() => {
+        if (this.isVisible) this.clampFamilyTreePanZoom(chartEl);
+      });
+      this.chartAreaResizeObserver.observe(chartEl);
+
       const ensureLinksVisible = () => {
         if (!this.chart || !this.chart.svg) return;
-        
-        // Find all link elements (paths and lines connecting nodes)
-        const links = this.chart.svg.querySelectorAll('path.link, line.link, .link, path[class*="link"], line[class*="link"]');
-        links.forEach((link: any) => {
-          // Ensure links are visible and have proper styling
-          if (link.style) {
-            link.style.display = '';
-            link.style.opacity = '1';
-            link.style.visibility = 'visible';
-            // Ensure stroke is visible
-            if (!link.getAttribute('stroke') || link.getAttribute('stroke') === 'none') {
-              link.setAttribute('stroke', '#ffffff');
-            }
-            if (!link.getAttribute('stroke-width') || link.getAttribute('stroke-width') === '0') {
-              link.setAttribute('stroke-width', '2');
-            }
+        const links = this.chart.svg.querySelectorAll('path.link');
+        links.forEach((link: Element) => {
+          const el = link as SVGPathElement;
+          el.style.opacity = '1';
+          el.style.visibility = 'visible';
+          if (!el.getAttribute('stroke') || el.getAttribute('stroke') === 'none') {
+            el.setAttribute('stroke', '#ffffff');
+          }
+          if (!el.getAttribute('stroke-width') || el.getAttribute('stroke-width') === '0') {
+            el.setAttribute('stroke-width', '2');
           }
         });
       };
-      
-      // Ensure links are visible after initial render
-      setTimeout(ensureLinksVisible, 100);
-      
-      // Monitor for pan/zoom events and ensure links stay visible
+
+      ensureLinksVisible();
+      setTimeout(ensureLinksVisible, 50);
+      setTimeout(ensureLinksVisible, 400);
+
+      const f3Canvas = chartContainer.querySelector('#f3Canvas');
+      if (f3Canvas) {
+        const onZoomActivity = () => {
+          ensureLinksVisible();
+        };
+        f3Canvas.addEventListener('wheel', onZoomActivity, { passive: true });
+        f3Canvas.addEventListener('pointerup', onZoomActivity);
+        f3Canvas.addEventListener('pointercancel', onZoomActivity);
+      }
+
       const svg = this.chart.svg;
       if (svg) {
-        // Listen for mouse events that might trigger pan/zoom
-        let isDragging = false;
-        svg.addEventListener('mousedown', () => {
-          isDragging = true;
-        });
-        svg.addEventListener('mousemove', () => {
-          if (isDragging) {
-            ensureLinksVisible();
-          }
-        });
-        svg.addEventListener('mouseup', () => {
-          isDragging = false;
-          ensureLinksVisible();
-        });
-        
-        // Also monitor for transform changes (zoom/pan)
-        const viewGroup = svg.querySelector('.view') || svg;
+        const viewGroup = svg.querySelector('.view');
         if (viewGroup) {
-          const observer = new MutationObserver(() => {
+          if (this.linkObserver) this.linkObserver.disconnect();
+          this.linkObserver = new MutationObserver(() => {
             ensureLinksVisible();
           });
-          
-          observer.observe(viewGroup, {
+          this.linkObserver.observe(viewGroup, {
             attributes: true,
             attributeFilter: ['transform', 'style'],
-            subtree: true
-          });
-          
-          // Also observe the SVG itself for any changes
-          observer.observe(svg, {
-            childList: true,
-            subtree: true
+            subtree: true,
           });
         }
       }
@@ -393,12 +424,94 @@ export class FamilyTree {
   }
 
   /**
+   * Clip the chart to the modal panel and constrain d3 zoom so the tree cannot be panned away.
+   * Uses layout node positions from family-chart (final x/y), matching setCardDim card size.
+   */
+  private clampFamilyTreePanZoom(chartContainer: HTMLElement): void {
+    const chart = this.chart as {
+      store?: { getTree?: () => { data?: Array<{ x?: number; y?: number }> } | null };
+    };
+    const tree = chart?.store?.getTree?.();
+    const nodes = tree?.data;
+    if (!nodes?.length) return;
+
+    const cardW = 120;
+    const cardH = 140;
+    const pad = 180;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const d of nodes) {
+      if (typeof d.x !== 'number' || typeof d.y !== 'number') continue;
+      minX = Math.min(minX, d.x);
+      minY = Math.min(minY, d.y);
+      maxX = Math.max(maxX, d.x + cardW);
+      maxY = Math.max(maxY, d.y + cardH);
+    }
+    if (!Number.isFinite(minX)) return;
+
+    const f3El = chartContainer.querySelector('#f3Canvas') as HTMLElement & {
+      __zoomObj?: {
+        extent: (e: [[number, number], [number, number]]) => unknown;
+        translateExtent: (e: [[number, number], [number, number]]) => unknown;
+        scaleExtent: (e: [number, number]) => unknown;
+        translateBy: (selection: unknown, dx: number, dy: number) => void;
+      };
+    };
+    const zoom = f3El.__zoomObj;
+    if (!f3El || !zoom) return;
+
+    const w = Math.max(1, f3El.clientWidth);
+    const h = Math.max(1, f3El.clientHeight);
+
+    const k = Math.max(zoomTransform(f3El).k, 1e-6);
+    // Viewport size in chart/world space — translateExtent must be at least this wide/tall or d3
+    // clamps all panning (see defaultConstrain in d3-zoom).
+    const vw = w / k;
+    const vh = h / k;
+
+    zoom.extent([
+      [0, 0],
+      [w, h],
+    ]);
+    zoom.scaleExtent([0.2, 6]);
+
+    let tx0 = minX - pad;
+    let tx1 = maxX + pad;
+    let ty0 = minY - pad;
+    let ty1 = maxY + pad;
+    const bw = tx1 - tx0;
+    const bh = ty1 - ty0;
+    if (bw < vw) {
+      const cx = (tx0 + tx1) / 2;
+      tx0 = cx - vw / 2;
+      tx1 = cx + vw / 2;
+    }
+    if (bh < vh) {
+      const cy = (ty0 + ty1) / 2;
+      ty0 = cy - vh / 2;
+      ty1 = cy + vh / 2;
+    }
+    // Extra slack so you can pan past the outermost cards a bit (still clipped by the modal).
+    const slackX = Math.min(vw * 0.35, 400);
+    const slackY = Math.min(vh * 0.35, 400);
+    zoom.translateExtent([
+      [tx0 - slackX, ty0 - slackY],
+      [tx1 + slackX, ty1 + slackY],
+    ]);
+
+    select(f3El).call(zoom.translateBy, 0, 0);
+  }
+
+  /**
    * Build family tree data structure in family-chart format
    * Uses IDs to track parent/child relationships
    */
   private buildFamilyTreeData(rootCreature: Creature): Data {
     const data: Data = [];
     const visited = new Set<number>(); // Track visited creature IDs
+    const placeholderIds = new Set<string>();
     this.creatureMap.clear();
 
     // Create a map of all creatures by ID for quick lookup
@@ -409,9 +522,45 @@ export class FamilyTree {
       creatureById.set(creature.id, creature);
     }
 
+    const ensureMissingParentRecord = (rawParentId: number, childIsGnawlin: boolean): string => {
+      const nodeId = `m${rawParentId}`;
+      if (placeholderIds.has(nodeId)) return nodeId;
+      placeholderIds.add(nodeId);
+      const portraitUrl = this.generateUnknownParentPortrait(childIsGnawlin ? 'Gnawlin' : 'Squibble');
+      data.push({
+        id: nodeId,
+        data: {
+          id: nodeId,
+          gender: 'M',
+          name: `Parent not in archive (#${rawParentId})`,
+          isDead: true,
+          portrait: portraitUrl,
+          isPlaceholder: true,
+        },
+        rels: {
+          parents: [],
+          spouses: [],
+          children: [],
+        },
+      });
+      return nodeId;
+    };
+
+    const resolveParentNode = (rawParentId: number, depth: number, childIsGnawlin: boolean): string | null => {
+      const parent = creatureById.get(rawParentId);
+      const usable = parent && (parent instanceof Gnawlin) === childIsGnawlin;
+      if (usable) {
+        return addCreature(rawParentId, depth + 1);
+      }
+      if (depth + 1 > FamilyTree.MAX_TREE_DEPTH) {
+        return null;
+      }
+      return ensureMissingParentRecord(rawParentId, childIsGnawlin);
+    };
+
     // Recursive function to add creature and ancestors (using IDs)
     const addCreature = (creatureId: number, depth: number = 0): string | null => {
-      if (depth > 5) return null; // Limit depth to prevent infinite recursion
+      if (depth > FamilyTree.MAX_TREE_DEPTH) return null;
       if (visited.has(creatureId)) return creatureId.toString();
 
       const creature = creatureById.get(creatureId);
@@ -425,32 +574,25 @@ export class FamilyTree {
       const children: string[] = [];
       const spouses: string[] = [];
 
-      // Add parents using IDs (only same species)
+      // Add parents using IDs (only same species); stub missing references so the chart stays connected
       const isGnawlin = creature instanceof Gnawlin;
       if (creature.parent1Id !== null) {
-        const parent = creatureById.get(creature.parent1Id);
-        // Only add parent if it's the same species
-        if (parent && (parent instanceof Gnawlin) === isGnawlin) {
-          const parentId = addCreature(creature.parent1Id, depth + 1);
-          if (parentId) {
-            parents.push(parentId);
-          }
+        const parentId = resolveParentNode(creature.parent1Id, depth, isGnawlin);
+        if (parentId) {
+          parents.push(parentId);
         }
       }
       if (creature.parent2Id !== null) {
-        const parent = creatureById.get(creature.parent2Id);
-        // Only add parent if it's the same species
-        if (parent && (parent instanceof Gnawlin) === isGnawlin) {
-          const parentId = addCreature(creature.parent2Id, depth + 1);
-          if (parentId && !parents.includes(parentId)) {
-            parents.push(parentId);
-          }
+        const parentId = resolveParentNode(creature.parent2Id, depth, isGnawlin);
+        if (parentId && !parents.includes(parentId)) {
+          parents.push(parentId);
         }
       }
 
       // Add mates to spouses array (only same species)
       // Note: Reciprocal relationships will be added when the mate's node is processed
       for (const mateId of creature.mateIds) {
+        if (mateId === creature.parent1Id || mateId === creature.parent2Id) continue;
         const mate = creatureById.get(mateId);
         // Only add mate if it's the same species
         if (mate && (mate instanceof Gnawlin) === isGnawlin) {
@@ -486,6 +628,12 @@ export class FamilyTree {
       };
 
       data.push(datum);
+      for (const pId of parents) {
+        const pDatum = data.find((d) => d.id === pId);
+        if (pDatum && !pDatum.rels.children.includes(nodeId)) {
+          pDatum.rels.children.push(nodeId);
+        }
+      }
       return nodeId;
     };
 
@@ -494,70 +642,102 @@ export class FamilyTree {
 
     // Add descendants (children) using IDs and update parent-child relationships
     // Only track children of the same species
-    const addChildren = (creatureId: number) => {
+    const addChildren = (creatureId: number, depthFromRoot: number = 0) => {
+      if (depthFromRoot > FamilyTree.MAX_TREE_DEPTH) return;
+
       const creature = creatureById.get(creatureId);
       if (!creature) return;
-      
+
       const isGnawlin = creature instanceof Gnawlin;
-      
+
       for (const other of this.allCreatures) {
         // Check if this creature is a parent of 'other' using IDs
         // Only if they're the same species
-        if ((other.parent1Id === creatureId || other.parent2Id === creatureId) && 
-            !visited.has(other.id) &&
-            (other instanceof Gnawlin) === isGnawlin) {
-          const childId = addCreature(other.id);
+        if (
+          (other.parent1Id === creatureId || other.parent2Id === creatureId) &&
+          !visited.has(other.id) &&
+          (other instanceof Gnawlin) === isGnawlin
+        ) {
+          const childId = addCreature(other.id, 0);
           if (childId) {
             // Find parent's datum and add child
-            const parentDatum = data.find(d => d.id === creatureId.toString());
+            const parentDatum = data.find((d) => d.id === creatureId.toString());
             if (parentDatum && !parentDatum.rels.children.includes(childId)) {
               parentDatum.rels.children.push(childId);
             }
           }
-          addChildren(other.id); // Recursively add grandchildren
+          addChildren(other.id, depthFromRoot + 1); // Recursively add grandchildren
         }
       }
     };
 
     addChildren(rootCreature.id);
 
-    // Add siblings - creatures that share the same parents (only same species)
-    // This needs to happen after all nodes are added
+    // Siblings share at least one parent. Pull any missing siblings into the tree (otherwise only
+    // the focused branch + descendants appear). family-chart uses `rels.spouses` for horizontal
+    // links, so we use it for sibling ties as well as mates.
+    let expandedSiblings = true;
+    while (expandedSiblings) {
+      expandedSiblings = false;
+      for (const datum of [...data]) {
+        if (datum.data?.isPlaceholder) continue;
+        const creatureId = parseInt(datum.id, 10);
+        if (Number.isNaN(creatureId)) continue;
+        const creature = creatureById.get(creatureId);
+        if (!creature) continue;
+        if (creature.parent1Id === null && creature.parent2Id === null) continue;
+
+        const isGnawlin = creature instanceof Gnawlin;
+
+        for (const other of this.allCreatures) {
+          if (other.id === creatureId) continue;
+          if ((other instanceof Gnawlin) !== isGnawlin) continue;
+
+          const shareParent =
+            (creature.parent1Id !== null &&
+              (other.parent1Id === creature.parent1Id || other.parent2Id === creature.parent1Id)) ||
+            (creature.parent2Id !== null &&
+              (other.parent1Id === creature.parent2Id || other.parent2Id === creature.parent2Id));
+
+          if (shareParent && !visited.has(other.id)) {
+            addCreature(other.id, 0);
+            addChildren(other.id);
+            expandedSiblings = true;
+          }
+        }
+      }
+    }
+
     for (const datum of data) {
-      const creatureId = parseInt(datum.id);
+      if (datum.data?.isPlaceholder) continue;
+      const creatureId = parseInt(datum.id, 10);
+      if (Number.isNaN(creatureId)) continue;
       const creature = creatureById.get(creatureId);
       if (!creature) continue;
-
-      // Only add siblings if this creature has parents
       if (creature.parent1Id === null && creature.parent2Id === null) continue;
-      
+
       const isGnawlin = creature instanceof Gnawlin;
-      
+
       for (const other of this.allCreatures) {
-        // Skip self
         if (other.id === creatureId) continue;
-        
-        // Only consider same species
         if ((other instanceof Gnawlin) !== isGnawlin) continue;
 
-        // Check if they share at least one parent (siblings)
         const shareParent =
-          (creature.parent1Id !== null && (other.parent1Id === creature.parent1Id || other.parent2Id === creature.parent1Id)) ||
-          (creature.parent2Id !== null && (other.parent1Id === creature.parent2Id || other.parent2Id === creature.parent2Id));
+          (creature.parent1Id !== null &&
+            (other.parent1Id === creature.parent1Id || other.parent2Id === creature.parent1Id)) ||
+          (creature.parent2Id !== null &&
+            (other.parent1Id === creature.parent2Id || other.parent2Id === creature.parent2Id));
 
-        if (shareParent) {
-          const siblingId = other.id.toString();
-          // Check if sibling is already in the tree
-          const siblingDatum = data.find(d => d.id === siblingId);
-          if (siblingDatum) {
-            // Add sibling to spouses array (family-chart uses spouses for horizontal connections like siblings)
-            if (!datum.rels.spouses.includes(siblingId)) {
-              datum.rels.spouses.push(siblingId);
-            }
-            // Also add reciprocal relationship
-            if (!siblingDatum.rels.spouses.includes(datum.id)) {
-              siblingDatum.rels.spouses.push(datum.id);
-            }
+        if (!shareParent) continue;
+
+        const siblingId = other.id.toString();
+        const siblingDatum = data.find((d) => d.id === siblingId);
+        if (siblingDatum) {
+          if (!datum.rels.spouses.includes(siblingId)) {
+            datum.rels.spouses.push(siblingId);
+          }
+          if (!siblingDatum.rels.spouses.includes(datum.id)) {
+            siblingDatum.rels.spouses.push(datum.id);
           }
         }
       }
@@ -575,6 +755,101 @@ export class FamilyTree {
     }
 
     return data;
+  }
+
+  private generateUnknownParentPortrait(species: 'Gnawlin' | 'Squibble'): string {
+    const canvas = document.createElement('canvas');
+    canvas.width = 80;
+    canvas.height = 80;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.fillStyle = '#4a4a5a';
+      ctx.fillRect(0, 0, 80, 80);
+      ctx.strokeStyle = '#7f8c8d';
+      ctx.lineWidth = 2;
+      if (species === 'Gnawlin') {
+        ctx.strokeRect(20, 20, 40, 40);
+      } else {
+        ctx.beginPath();
+        ctx.arc(40, 40, 22, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.fillStyle = '#bdc3c7';
+      ctx.font = 'bold 28px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('?', 40, 40);
+    }
+    return canvas.toDataURL();
+  }
+
+  private renderPlaceholderCard(d: any): string {
+    const name = d.data?.name ?? 'Unknown parent';
+    const portraitUrl = d.data?.portrait ?? '';
+    return `
+      <div style="
+        width: 100%;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: flex-start;
+        background: #2a2a32;
+        border: 2px dashed #7f8c8d;
+        border-radius: 8px;
+        padding: 8px;
+        box-sizing: border-box;
+      ">
+        <img src="${portraitUrl}" alt="" style="
+          width: 80px;
+          height: 80px;
+          border-radius: 50%;
+          margin-bottom: 8px;
+          display: block;
+          object-fit: cover;
+        " />
+        <div style="
+          font-size: 10px;
+          text-align: center;
+          color: #bdc3c7;
+          font-weight: bold;
+          font-family: '${FontLoader.getFontFamily()}', monospace;
+        ">
+          ${name}
+        </div>
+        <div style="
+          font-size: 9px;
+          text-align: center;
+          color: #7f8c8d;
+          font-family: '${FontLoader.getFontFamily()}', monospace;
+        ">
+          Not in archive
+        </div>
+      </div>
+    `;
+  }
+
+  private renderMissingRecordCard(nodeId: string): string {
+    return `
+      <div style="
+        width: 100%;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        background: #2c2c2c;
+        border: 2px solid #c0392b;
+        border-radius: 8px;
+        padding: 8px;
+        box-sizing: border-box;
+      ">
+        <div style="font-size: 11px; color: #ecf0f1; text-align: center; font-family: '${FontLoader.getFontFamily()}', monospace;">
+          Missing record
+        </div>
+        <div style="font-size: 9px; color: #95a5a6; margin-top: 4px;">${nodeId}</div>
+      </div>
+    `;
   }
 
   /**
@@ -785,7 +1060,8 @@ export class FamilyTree {
     content.innerHTML += `Metabolism: ${stats.metabolism.toFixed(2)}<br>`;
     content.innerHTML += `Damage Resistance: ${stats.damage_resistance.toFixed(2)}<br>`;
     content.innerHTML += `Aggressiveness: ${stats.aggressiveness.toFixed(2)}<br>`;
-    content.innerHTML += `Damage: ${stats.damage.toFixed(1)}<br></div>`;
+    content.innerHTML += `Damage: ${stats.damage.toFixed(1)}<br>`;
+    content.innerHTML += `Combat speed: ${(stats as any).combat_speed != null ? (stats as any).combat_speed.toFixed(2) : '1.00'}×<br></div>`;
 
     // Breeding
     content.innerHTML += `<div style="margin-bottom: 15px;"><strong style="color: #3498db;">Breeding:</strong><br>`;

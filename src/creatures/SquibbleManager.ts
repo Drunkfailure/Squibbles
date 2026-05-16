@@ -10,6 +10,9 @@ import { Stats } from '../utils/types';
 export class SquibbleManager {
   private squibbles: Squibble[] = [];
   private breedingDistance: number = 20; // Distance needed for breeding
+
+  /** IDs for which we've already incremented death counters (squibbles stay in list when dead for genealogy). */
+  private squibbleDeathStatsLogged: Set<number> = new Set();
   
   // Death tracking
   private deathsByAge: number = 0;
@@ -74,6 +77,7 @@ export class SquibbleManager {
     const newBabies: Squibble[] = [];
     
     for (const squibble of this.squibbles) {
+      if (!squibble.alive) continue;
       if (squibble.isReadyToGiveBirth()) {
         // giveBirth() now returns an array of babies (1-4)
         // May also kill the mother if childbirth risk is high
@@ -241,7 +245,8 @@ export class SquibbleManager {
     
     // Track deaths and remove dead squibbles
     for (const squibble of this.squibbles) {
-      if (!squibble.alive && squibble.deathCause) {
+      if (!squibble.alive && squibble.deathCause && !this.squibbleDeathStatsLogged.has(squibble.id)) {
+        this.squibbleDeathStatsLogged.add(squibble.id);
         switch (squibble.deathCause) {
           case 'age':
             this.deathsByAge++;
@@ -264,7 +269,7 @@ export class SquibbleManager {
         }
       }
     }
-    this.squibbles = this.squibbles.filter(s => s.alive);
+    // Keep deceased squibbles in the list so parent IDs / family tree remain resolvable
   }
   
   getAll(): Squibble[] {
@@ -276,29 +281,34 @@ export class SquibbleManager {
   }
   
   getStats(): Stats {
-    if (this.squibbles.length === 0) {
-      return { count: 0, alive: 0 };
+    const alive = this.squibbles.filter(s => s.alive);
+    if (alive.length === 0) {
+      return {
+        count: this.squibbles.length,
+        alive: 0,
+        avg_hunger: 0,
+        avg_thirst: 0,
+        avg_health: 0,
+        avg_speed: 0,
+        seeking_food_count: 0,
+        seeking_mate_count: 0,
+      };
     }
-    
-    const aliveCount = this.squibbles.filter(s => s.alive).length;
-    const avgHunger = this.squibbles.reduce((sum, s) => sum + s.hunger, 0) / this.squibbles.length;
-    const avgThirst = this.squibbles.reduce((sum, s) => sum + s.thirst, 0) / this.squibbles.length;
-    const avgHealth = this.squibbles.reduce((sum, s) => sum + s.health, 0) / this.squibbles.length;
-    const avgSpeed = this.squibbles.reduce((sum, s) => sum + s.speed, 0) / this.squibbles.length;
-    const seekingFoodCount = this.squibbles.filter(
-      s => s.alive && s.hunger < 70.0
-    ).length;
-    const seekingMateCount = this.squibbles.filter(
-      s => s.alive && s.seekingMate
-    ).length;
-    
+
+    const totalHunger = alive.reduce((sum, s) => sum + s.hunger, 0);
+    const totalThirst = alive.reduce((sum, s) => sum + s.thirst, 0);
+    const totalHealth = alive.reduce((sum, s) => sum + s.health, 0);
+    const totalSpeed = alive.reduce((sum, s) => sum + s.speed, 0);
+    const seekingFoodCount = alive.filter(s => s.hunger < 70.0).length;
+    const seekingMateCount = alive.filter(s => s.seekingMate).length;
+
     return {
       count: this.squibbles.length,
-      alive: aliveCount,
-      avg_hunger: avgHunger,
-      avg_thirst: avgThirst,
-      avg_health: avgHealth,
-      avg_speed: avgSpeed,
+      alive: alive.length,
+      avg_hunger: totalHunger / alive.length,
+      avg_thirst: totalThirst / alive.length,
+      avg_health: totalHealth / alive.length,
+      avg_speed: totalSpeed / alive.length,
       seeking_food_count: seekingFoodCount,
       seeking_mate_count: seekingMateCount,
     };
@@ -306,6 +316,7 @@ export class SquibbleManager {
   
   clear(): void {
     this.squibbles = [];
+    this.squibbleDeathStatsLogged.clear();
     this.deathsByAge = 0;
     this.deathsByHunger = 0;
     this.deathsByThirst = 0;

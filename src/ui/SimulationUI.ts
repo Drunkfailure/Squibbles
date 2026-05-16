@@ -272,6 +272,7 @@ export class SimulationUI {
       `  Aggressiveness: ${((stats.aggressiveness ?? 0.5) * 100).toFixed(1)}%`,
       `  Damage: ${(stats.damage ?? 5).toFixed(1)}`,
       `  Accuracy: ${((stats.accuracy ?? 0.7) * 100).toFixed(1)}%`,
+      `  Combat speed: ${(stats.combat_speed ?? 1.0).toFixed(2)}× (${(1.0 / (stats.combat_speed ?? 1.0)).toFixed(2)}s baseline swing)`,
       `  Awareness: ${((stats.awareness ?? 0.5) * 100).toFixed(1)}%`,
       `  Wet: ${(stats.wet_timer ?? 0) > 0 ? (stats.wet_timer ?? 0).toFixed(1) + 's' : 'No'}`,
       '',

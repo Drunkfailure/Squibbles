@@ -74,12 +74,15 @@ export class Squibble {
   // Awareness (0-1): Likelihood of noticing and avoiding predators when in vision
   public awareness: number;
   
+  // Combat speed (~0.55–1.65): multiplier on attack rate (higher = shorter time between strikes)
+  public combatSpeed: number;
+  
   // Combat state
   public isInCombat: boolean = false;
   public combatTarget: any = null; // Squibble or Gnawlin that this is fighting
   public combatTurn: boolean = false; // True if it's this creature's turn to attack
   public combatTimer: number = 0; // Time until next turn (turn-based combat)
-  private combatTurnDuration: number = 1.0; // 1 second per turn
+  private static readonly combatTurnBaseSeconds: number = 1.0; // Baseline seconds between attacks at combatSpeed 1.0
   
   // Wet: after leaving water, slow for 30 seconds
   public wetTimer: number = 0;
@@ -196,6 +199,7 @@ export class Squibble {
     this.maxHealth = phenotypes.maxHealth;
     this.accuracy = phenotypes.accuracy;
     this.awareness = phenotypes.awareness;
+    this.combatSpeed = phenotypes.combatSpeed;
     
     // Set initial hunger/thirst to capacity
     this.hunger = this.hungerCapacity;
@@ -283,7 +287,7 @@ export class Squibble {
       this.combatTimer -= dt;
       if (this.combatTimer <= 0) {
         this.combatTurn = true;
-        this.combatTimer = this.combatTurnDuration;
+        this.combatTimer = this.getCombatTurnInterval();
       }
     }
     
@@ -324,8 +328,11 @@ export class Squibble {
         }
       }
     } else {
-      // Not in combat - check for predators (Gnawlins) using awareness
-      if (gnawlinManager) {
+      // Not in combat — may join a squibble already fighting a gnawlin
+      if (squibbleManager && gnawlinManager) {
+        this.tryJoinAllyCombatAgainstGnawlin(squibbleManager);
+      }
+      if (!this.isInCombat && gnawlinManager) {
         const nearestGnawlin = this.findNearestGnawlin(gnawlinManager);
         if (nearestGnawlin && nearestGnawlin.alive) {
           const dx = nearestGnawlin.x - this.x;
@@ -345,7 +352,7 @@ export class Squibble {
               // Low aggressiveness = flee, High aggressiveness = stand ground and continue normal behavior
               if (Math.random() < this.aggressiveness) {
                 // Stand ground - continue doing what they're doing (don't flee, but also don't attack)
-                // Squibbles never initiate combat with Gnawlins
+                // Squibbles do not start combat alone vs gnawlins (ally join is handled above)
               } else {
                 // Flee from the predator
                 this.fleeFrom(nearestGnawlin);
@@ -428,9 +435,10 @@ export class Squibble {
       return;
     }
     
-    // Try to drink if thirsty and near water (only stop to drink if actually thirsty)
+    // Drink when near water and below ~90% capacity (top up opportunistically)
+    const drinkWhileBelow = this.thirstCapacity * 0.9;
     this.isDrinking = false;
-    if (waterMap && this.thirst < 90) {
+    if (waterMap && this.thirst < drinkWhileBelow) {
       if (waterMap.isWaterNear(this.x, this.y, this.radius + 20)) {
         // Drink: restore thirst gradually (stay until full)
         this.isDrinking = true;
@@ -451,7 +459,7 @@ export class Squibble {
     // Only if not already eating
     if (!this.isEating && foodManager) {
       const isHungry = this.hunger < this.hungerThreshold;
-      const isThirsty = this.thirst < 50; // Same threshold as seeking water
+      const isThirsty = this.thirst < this.thirstThreshold;
       const needsHealth = this.health < this.maxHealth; // Need health restoration
       
       // Only try to eat if we actually need food/thirst/health
@@ -507,7 +515,8 @@ export class Squibble {
       // Squibbles prioritize survival over reproduction
       // This is re-evaluated every frame, so seekingMate will turn back on automatically
       // when conditions are met again (e.g., after eating and getting full)
-      const canSeekMate = this.health >= this.matingHealthThreshold &&
+      const healthPct = this.health / this.maxHealth;
+      const canSeekMate = healthPct >= this.matingHealthThreshold &&
                          this.hunger >= this.matingHungerThreshold &&
                          this.thirst >= this.matingThirstThreshold &&
                          this.breedingCooldown <= 0 &&
@@ -516,8 +525,8 @@ export class Squibble {
       this.seekingMate = canSeekMate;
     }
     
-    // Check if we need to seek water (start at 50%, drink until 90%)
-    const seekingWater = this.thirst < 50;
+    // Check if we need to seek water (same threshold as hunger / mating hydration expectation)
+    const seekingWater = this.thirst < this.thirstThreshold;
     
     // Priority: Food > Water > Mate > Wander
     if (seekingFood && foodManager) {
@@ -855,6 +864,7 @@ export class Squibble {
       aggressiveness: this.aggressiveness,
       damage: this.damage,
       accuracy: this.accuracy,
+      combat_speed: this.combatSpeed,
       awareness: this.awareness,
       wet_timer: this.wetTimer,
       litter_size: this.litterSize,
@@ -879,6 +889,32 @@ export class Squibble {
     return this.age >= youngLimit && this.age <= oldLimit;
   }
   
+  private getCombatTurnInterval(): number {
+    return Squibble.combatTurnBaseSeconds / this.combatSpeed;
+  }
+
+  /**
+   * Clear combat fields only (used by Gnawlin when ending a multi-squibble fight).
+   */
+  clearLocalCombatState(): void {
+    this.isInCombat = false;
+    this.combatTarget = null;
+    this.combatTurn = false;
+    this.combatTimer = 0;
+  }
+
+  /**
+   * Join an ongoing fight against a gnawlin (must be registered via gnawlin.addCombatAssistant).
+   */
+  joinCombatAsAlly(gnawlin: Gnawlin): void {
+    if (this.isInCombat) return;
+    this.isInCombat = true;
+    this.combatTarget = gnawlin;
+    this.combatTurn = false;
+    // Stagger entry so allies don't all strike on the same tick
+    this.combatTimer = this.getCombatTurnInterval() * (0.2 + Math.random() * 0.6);
+  }
+  
   /**
    * Start combat with a target (called by Gnawlin when it attacks)
    */
@@ -888,27 +924,29 @@ export class Squibble {
     this.isInCombat = true;
     this.combatTarget = target;
     this.combatTurn = false; // Squibble goes second (Gnawlin attacks first)
-    this.combatTimer = this.combatTurnDuration;
+    this.combatTimer = this.getCombatTurnInterval();
   }
   
   /**
    * End combat
    */
   endCombat(): void {
-    if (this.combatTarget) {
-      // Clear target's combat state if it's still pointing to us
-      if (this.combatTarget.combatTarget === this) {
-        this.combatTarget.isInCombat = false;
-        this.combatTarget.combatTarget = null;
-        this.combatTarget.combatTurn = false;
-        this.combatTarget.combatTimer = 0;
+    const t = this.combatTarget;
+    if (t instanceof Gnawlin) {
+      if (t.combatTarget === this) {
+        t.endCombat();
+      } else {
+        t.removeCombatAssistant(this);
       }
+      return;
     }
-    
-    this.isInCombat = false;
-    this.combatTarget = null;
-    this.combatTurn = false;
-    this.combatTimer = 0;
+    if (t && t.combatTarget === this) {
+      t.isInCombat = false;
+      t.combatTarget = null;
+      t.combatTurn = false;
+      t.combatTimer = 0;
+    }
+    this.clearLocalCombatState();
   }
   
   /**
@@ -925,14 +963,50 @@ export class Squibble {
       
       // Check if target died
       if (target.health <= 0) {
-        target.deathCause = 'predator';
         target.alive = false;
-        this.endCombat();
+        if (target instanceof Gnawlin) {
+          (target as Gnawlin).endCombat();
+          this.clearLocalCombatState();
+        } else {
+          target.deathCause = 'predator';
+          this.endCombat();
+        }
       }
     }
     // Miss - no damage dealt
   }
   
+  /**
+   * If another squibble is the gnawlin's primary target and both are in sight,
+   * notice (awareness) and optionally join the fight (aggressiveness).
+   */
+  private tryJoinAllyCombatAgainstGnawlin(squibbleManager: any): void {
+    const pregnancyAwarenessBoost = this.isPregnant ? 0.3 : 0;
+    const effectiveAwareness = Math.min(1.0, this.awareness + pregnancyAwarenessBoost);
+
+    for (const other of squibbleManager.getAlive()) {
+      if (other === this || !other.alive) continue;
+      if (!other.isInCombat || !other.combatTarget) continue;
+      if (!(other.combatTarget instanceof Gnawlin)) continue;
+      const gnawlin = other.combatTarget as Gnawlin;
+      if (!gnawlin.alive || !gnawlin.isInCombat) continue;
+      if (gnawlin.combatTarget !== other) continue;
+
+      const dx = other.x - this.x;
+      const dy = other.y - this.y;
+      if (dx * dx + dy * dy > this.effectiveVision * this.effectiveVision) continue;
+
+      const dgx = gnawlin.x - this.x;
+      const dgy = gnawlin.y - this.y;
+      if (dgx * dgx + dgy * dgy > this.effectiveVision * this.effectiveVision) continue;
+
+      if (Math.random() >= effectiveAwareness) continue;
+      const joinChance = Math.min(0.95, this.aggressiveness * 0.88);
+      if (Math.random() >= joinChance) continue;
+      if (gnawlin.addCombatAssistant(this)) return;
+    }
+  }
+
   /**
    * Find the nearest Gnawlin within vision range
    */

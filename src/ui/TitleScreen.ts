@@ -29,9 +29,10 @@ export class TitleScreen {
   // Settings
   private creatureCount: number = 200;
   private gnawlinCount: number = 0; // Default to 0 (no gnawlins)
+  private foodCount: number = 200;
   private mapWidth: number = 6000;
   private mapHeight: number = 6000;
-  private biomeScale: number = 5;
+  private biomeScale: number = 6;
   private biomeWeights = { plains: 45, forest: 25, desert: 20, tundra: 10 };
   private pondChance: number = 15;
   private riverChance: number = 60;
@@ -247,7 +248,9 @@ export class TitleScreen {
         </div>
         
         <div style="margin-bottom: 15px;">
-          <p style="font-size: 12px; color: #aaa; margin-top: 5px;">Food spawns automatically based on biome tiles</p>
+          <label>Max food (eatable slots, e.g. 200):</label>
+          <input type="number" id="food-count" value="200" min="0" max="100000" style="margin-left: 10px; padding: 5px; width: 100px;">
+          <p style="font-size: 11px; color: #aaa; margin: 5px 0 0 0;">World spawn is scaled so total max bites ≈ this (trees/shrubs count by their slots).</p>
         </div>
         
         <div style="margin-bottom: 15px;">
@@ -258,6 +261,17 @@ export class TitleScreen {
         <div style="margin-bottom: 15px;">
           <label>Map Height (1000-10000):</label>
           <input type="number" id="map-height" value="6000" min="1000" max="10000" style="margin-left: 10px; padding: 5px; width: 100px;">
+        </div>
+        
+        <div style="margin-bottom: 15px;">
+          <label>Biome regions (1 = patchy, 10 = large cohesive):</label>
+          <input type="number" id="biome-scale" value="6" min="1" max="12" style="margin-left: 10px; padding: 5px; width: 60px;">
+        </div>
+        
+        <div style="margin-bottom: 15px;">
+          <label>World seed (optional):</label>
+          <input type="text" id="world-seed" placeholder="Random if empty" style="margin-left: 10px; padding: 5px; width: 140px;" inputmode="numeric" pattern="-?[0-9]*">
+          <p style="font-size: 11px; color: #888; margin: 4px 0 0 0;">Same number → same terrain. Check the browser console for the seed when empty.</p>
         </div>
         
         <div style="margin-top: 30px; text-align: center;">
@@ -328,6 +342,19 @@ export class TitleScreen {
     this.gnawlinCount = Math.max(0, Math.min(500, parseInt(gnawlinInput.value) || 0));
     this.mapWidth = Math.max(1000, Math.min(10000, parseInt(widthInput.value) || 6000));
     this.mapHeight = Math.max(1000, Math.min(10000, parseInt(heightInput.value) || 6000));
+    const foodInput = document.getElementById('food-count') as HTMLInputElement | null;
+    this.foodCount = Math.max(0, Math.min(100000, parseInt(foodInput?.value ?? '200', 10) || 200));
+    
+    const biomeScaleInput = document.getElementById('biome-scale') as HTMLInputElement | null;
+    this.biomeScale = Math.max(1, Math.min(12, parseInt(biomeScaleInput?.value ?? '6', 10) || 6));
+    
+    const seedInput = document.getElementById('world-seed') as HTMLInputElement | null;
+    const seedRaw = seedInput?.value?.trim() ?? '';
+    let worldSeed: number | undefined;
+    if (seedRaw !== '') {
+      const n = Number.parseInt(seedRaw, 10);
+      if (Number.isFinite(n)) worldSeed = n;
+    }
     
     const settings: GameSettings = {
       mapWidth: this.mapWidth,
@@ -336,6 +363,8 @@ export class TitleScreen {
       screenHeight: window.innerHeight,
       creatureCount: this.creatureCount,
       gnawlinCount: this.gnawlinCount,
+      foodCount: this.foodCount,
+      worldSeed,
       terrain: {
         biome_scale: this.biomeScale,
         biome_weights: { ...this.biomeWeights },

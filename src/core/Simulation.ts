@@ -12,6 +12,7 @@ import { Gnawlin } from '../creatures/Gnawlin';
 import { FoodManager } from '../food/FoodManager';
 import { generateWorld, WorldData } from '../terrain/WorldGenerator';
 import { WaterMap } from '../terrain/WaterMap';
+import { Biome } from '../terrain/Biome';
 import { TerrainRenderer } from '../terrain/TerrainRenderer';
 import { Renderer } from './Renderer';
 import { EventManager } from './EventManager';
@@ -70,7 +71,8 @@ export class Simulation extends Game {
     this.gnawlinManager = new GnawlinManager();
     this.foodManager = new FoodManager(
       settings.mapWidth,
-      settings.mapHeight
+      settings.mapHeight,
+      settings.foodCount ?? 200
     );
     this.terrainRenderer = new TerrainRenderer();
     this.ui = new SimulationUI(settings.screenWidth, settings.screenHeight);
@@ -162,7 +164,7 @@ export class Simulation extends Game {
       this.settings.mapWidth,
       this.settings.mapHeight,
       this.settings.terrain,
-      undefined,
+      this.settings.worldSeed,
       onProgress
     );
     
@@ -193,9 +195,15 @@ export class Simulation extends Game {
     console.log(`Spawning ${count} squibbles...`);
     
     for (let i = 0; i < count; i++) {
-      const x = 50 + Math.random() * (this.settings.mapWidth - 100);
-      const y = 50 + Math.random() * (this.settings.mapHeight - 100);
-      this.squibbleManager.addSquibble(x, y);
+      const challenging = Math.random() < 0.42;
+      const pos = this.pickLandSpawnPosition(challenging);
+      if (pos) {
+        this.squibbleManager.addSquibble(pos.x, pos.y);
+      } else {
+        const x = 50 + Math.random() * (this.settings.mapWidth - 100);
+        const y = 50 + Math.random() * (this.settings.mapHeight - 100);
+        this.squibbleManager.addSquibble(x, y);
+      }
       
       if (i % 100 === 0 && i > 0) {
         console.log(`Spawned ${i}/${count} squibbles...`);
@@ -205,6 +213,38 @@ export class Simulation extends Game {
     console.log(`Finished spawning ${count} squibbles`);
   }
   
+  /**
+   * Spawn on land tiles; when challenging, bias toward desert/tundra so lineages face real pressure.
+   */
+  private pickLandSpawnPosition(challenging: boolean): { x: number; y: number } | null {
+    if (!this.worldData || !this.waterMap) return null;
+    const wd = this.worldData;
+    const ts = wd.tileSize;
+    const cols = wd.cols;
+    const rows = wd.rows;
+    const jitter = () => (Math.random() - 0.5) * ts * 0.35;
+    
+    for (let attempt = 0; attempt < 48; attempt++) {
+      const tr = Math.floor(Math.random() * rows);
+      const tc = Math.floor(Math.random() * cols);
+      const idx = tr * cols + tc;
+      const biome = wd.biomeGrid[idx];
+      if (biome === Biome.WATER) continue;
+      
+      const x = (tc + 0.5) * ts + jitter();
+      const y = (tr + 0.5) * ts + jitter();
+      if (this.waterMap.isWaterAt(x, y)) continue;
+      
+      if (challenging && attempt < 36) {
+        const hard = biome === Biome.DESERT || biome === Biome.TUNDRA;
+        if (!hard) continue;
+      }
+      
+      return { x, y };
+    }
+    return null;
+  }
+  
   private spawnInitialGnawlins(): void {
     const count = this.settings.gnawlinCount;
     if (count === 0) return; // No gnawlins to spawn
@@ -212,9 +252,15 @@ export class Simulation extends Game {
     console.log(`Spawning ${count} gnawlins...`);
     
     for (let i = 0; i < count; i++) {
-      const x = 50 + Math.random() * (this.settings.mapWidth - 100);
-      const y = 50 + Math.random() * (this.settings.mapHeight - 100);
-      this.gnawlinManager.addGnawlin(x, y);
+      const challenging = Math.random() < 0.35;
+      const pos = this.pickLandSpawnPosition(challenging);
+      if (pos) {
+        this.gnawlinManager.addGnawlin(pos.x, pos.y);
+      } else {
+        const x = 50 + Math.random() * (this.settings.mapWidth - 100);
+        const y = 50 + Math.random() * (this.settings.mapHeight - 100);
+        this.gnawlinManager.addGnawlin(x, y);
+      }
       
       if (i % 50 === 0 && i > 0) {
         console.log(`Spawned ${i}/${count} gnawlins...`);
@@ -687,7 +733,8 @@ export class Simulation extends Game {
         this.gnawlinManager.clear();
         this.foodManager = new FoodManager(
           this.settings.mapWidth,
-          this.settings.mapHeight
+          this.settings.mapHeight,
+          this.settings.foodCount ?? 200
         );
         this.foodManager.spawnFood(
           this.worldData?.biomeGrid,
@@ -862,13 +909,13 @@ export class Simulation extends Game {
       icons.push('love');
     }
     
-    // Hunger icon (show when below 50 OR when actively eating)
-    if (squibble.hunger < 50.0 || squibble.isEating) {
+    // Hunger icon (when actively seeking food / eating — align with hungerThreshold 70)
+    if (squibble.hunger < 70.0 || squibble.isEating) {
       icons.push('hunger');
     }
     
-    // Thirst icon (show when below 50)
-    if (squibble.thirst < 50.0) {
+    // Thirst icon (align with squibble thirstThreshold 70)
+    if (squibble.thirst < 70.0) {
       icons.push('thirst');
     }
     

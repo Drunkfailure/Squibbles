@@ -9,6 +9,8 @@ import { SquibbleManager } from './SquibbleManager';
 export class GnawlinManager {
   private gnawlins: Gnawlin[] = [];
   private breedingDistance: number = 20; // Distance needed for breeding
+
+  private gnawlinDeathStatsLogged: Set<number> = new Set();
   
   // Death tracking
   private deathsByAge: number = 0;
@@ -60,6 +62,7 @@ export class GnawlinManager {
     const newBabies: Gnawlin[] = [];
     
     for (const gnawlin of this.gnawlins) {
+      if (!gnawlin.alive) continue;
       if (gnawlin.isReadyToGiveBirth()) {
         // giveBirth() returns an array of babies (always 1 for gnawlins)
         // May also kill the mother if childbirth risk is high (though risk is 0 for single births)
@@ -149,7 +152,8 @@ export class GnawlinManager {
     
     // Track deaths and remove dead gnawlins
     for (const gnawlin of this.gnawlins) {
-      if (!gnawlin.alive && gnawlin.deathCause) {
+      if (!gnawlin.alive && gnawlin.deathCause && !this.gnawlinDeathStatsLogged.has(gnawlin.id)) {
+        this.gnawlinDeathStatsLogged.add(gnawlin.id);
         switch (gnawlin.deathCause) {
           case 'age':
             this.deathsByAge++;
@@ -166,7 +170,7 @@ export class GnawlinManager {
         }
       }
     }
-    this.gnawlins = this.gnawlins.filter(g => g.alive);
+    // Keep deceased gnawlins for genealogy / parent ID resolution
   }
   
   getAll(): Gnawlin[] {
@@ -178,20 +182,16 @@ export class GnawlinManager {
   }
   
   getStats(): { count: number; alive: number } {
-    if (this.gnawlins.length === 0) {
-      return { count: 0, alive: 0 };
-    }
-    
-    const aliveCount = this.gnawlins.filter(g => g.alive).length;
-    
+    const aliveList = this.gnawlins.filter(g => g.alive);
     return {
       count: this.gnawlins.length,
-      alive: aliveCount,
+      alive: aliveList.length,
     };
   }
   
   clear(): void {
     this.gnawlins = [];
+    this.gnawlinDeathStatsLogged.clear();
     this.deathsByAge = 0;
     this.deathsByHunger = 0;
     this.deathsByThirst = 0;
