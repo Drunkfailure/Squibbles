@@ -6,6 +6,7 @@ import { Squibble } from './Squibble';
 import { FoodManager } from '../food/FoodManager';
 import { WaterMap } from '../terrain/WaterMap';
 import { Stats } from '../utils/types';
+import { ParentageRecord } from '../genetics/Genetics';
 
 export class SquibbleManager {
   private squibbles: Squibble[] = [];
@@ -24,6 +25,13 @@ export class SquibbleManager {
   
   addSquibble(x: number, y: number, color?: [number, number, number], parent1?: Squibble, parent2?: Squibble): void {
     this.squibbles.push(new Squibble(x, y, color, parent1, parent2));
+  }
+
+  /** Resolve parent IDs for inbreeding checks (includes deceased squibbles in the archive). */
+  getParentageRecord(id: number): ParentageRecord | undefined {
+    const squibble = this.squibbles.find((s) => s.id === id);
+    if (!squibble) return undefined;
+    return { id: squibble.id, parent1Id: squibble.parent1Id, parent2Id: squibble.parent2Id };
   }
   
   /**
@@ -81,7 +89,7 @@ export class SquibbleManager {
       if (squibble.isReadyToGiveBirth()) {
         // giveBirth() now returns an array of babies (1-4)
         // May also kill the mother if childbirth risk is high
-        const babies = squibble.giveBirth();
+        const babies = squibble.giveBirth((id) => this.getParentageRecord(id));
         newBabies.push(...babies);
       }
     }

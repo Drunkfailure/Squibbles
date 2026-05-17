@@ -16,6 +16,9 @@ import {
   DEFAULT_MUTATION_CONFIG,
   MULTI_ALLELE_TRAITS,
   getMultiAllelePhenotype,
+  getMutationConfigForParents,
+  ParentageLookup,
+  MutationConfig,
 } from '../genetics/Genetics';
 
 export class Gnawlin {
@@ -79,7 +82,9 @@ export class Gnawlin {
   private static readonly combatTurnBaseSeconds: number = 1.0;
   /** Squibbles that joined to help the primary victim (combatTarget). */
   public combatAssistants: Squibble[] = [];
-  private static readonly maxCombatAssistants: number = 4;
+  /** Max squibbles in one fight vs this gnawlin (primary target + allies). */
+  private static readonly maxSquibblesPerFight: number = 2;
+  private static readonly maxCombatAssistants: number = Gnawlin.maxSquibblesPerFight - 1;
   
   // Wet: after leaving water, slow for 30 seconds
   public wetTimer: number = 0;
@@ -112,7 +117,7 @@ export class Gnawlin {
   private waterCrossingTarget: { x: number; y: number } | null = null;
   
     // Speed-based consumption rates (slower than squibbles - gnawlins have slower metabolism)
-    private baseHungerRate: number = 0.3; // Reduced from 0.5 (40% slower)
+    private baseHungerRate: number = 0.38; // Slower than squibbles (0.5) but hunts more often
     private baseThirstRate: number = 0.2; // Reduced from 0.3 (33% slower)
   
   // Drinking state
@@ -154,7 +159,14 @@ export class Gnawlin {
   public parent2Id: number | null = null; // Father ID (or second parent ID)
   public mateIds: number[] = []; // All breeding partners this gnawlin has mated with
   
-  constructor(x: number, y: number, color?: RGB, parent1?: Gnawlin, parent2?: Gnawlin) {
+  constructor(
+    x: number,
+    y: number,
+    color?: RGB,
+    parent1?: Gnawlin,
+    parent2?: Gnawlin,
+    mutationConfig?: MutationConfig
+  ) {
     // Assign unique ID
     this.id = Gnawlin.nextId++;
     
@@ -167,8 +179,11 @@ export class Gnawlin {
     
     // Genetics: inherit from parents or generate randomly
     if (parent1 && parent2) {
-      // Inherit genome from parents with mutations
-      this.genome = inheritGenome(parent1.genome, parent2.genome, DEFAULT_MUTATION_CONFIG);
+      this.genome = inheritGenome(
+        parent1.genome,
+        parent2.genome,
+        mutationConfig ?? DEFAULT_MUTATION_CONFIG
+      );
     } else {
       // Generate random genome
       this.genome = generateRandomGenome();
@@ -826,8 +841,19 @@ export class Gnawlin {
    * Returns array of babies (can be 1-4)
    * May kill the mother if risk is high
    */
-  giveBirth(gnawlinManager?: any): Gnawlin[] {
+  giveBirth(gnawlinManager?: { getParentageRecord?: ParentageLookup }): Gnawlin[] {
     if (!this.isPregnant || !this.pregnancyFather) return [];
+
+    const parentageLookup = gnawlinManager?.getParentageRecord;
+    const mutationConfig = getMutationConfigForParents(
+      { id: this.id, parent1Id: this.parent1Id, parent2Id: this.parent2Id },
+      {
+        id: this.pregnancyFather.id,
+        parent1Id: this.pregnancyFather.parent1Id,
+        parent2Id: this.pregnancyFather.parent2Id,
+      },
+      parentageLookup
+    );
     
     // Determine actual litter size
     const actualLitterSize = this.determineLitterSize();
@@ -857,7 +883,7 @@ export class Gnawlin {
       const babyX = this.x + Math.cos(angle) * offset;
       const babyY = this.y + Math.sin(angle) * offset;
       
-      const baby = new Gnawlin(babyX, babyY, undefined, this, this.pregnancyFather);
+      const baby = new Gnawlin(babyX, babyY, undefined, this, this.pregnancyFather, mutationConfig);
       babies.push(baby);
     }
     
@@ -899,6 +925,11 @@ export class Gnawlin {
     if (!target.isInCombat) {
       target.startCombat(this);
     }
+  }
+
+  /** Whether another squibble may join this gnawlin fight (cap: two squibbles total). */
+  canAcceptCombatAssistant(): boolean {
+    return this.combatAssistants.length < Gnawlin.maxCombatAssistants;
   }
 
   /**

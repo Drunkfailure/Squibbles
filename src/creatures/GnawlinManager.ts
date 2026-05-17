@@ -5,6 +5,7 @@
 import { Gnawlin } from './Gnawlin';
 import { WaterMap } from '../terrain/WaterMap';
 import { SquibbleManager } from './SquibbleManager';
+import { ParentageRecord } from '../genetics/Genetics';
 
 export class GnawlinManager {
   private gnawlins: Gnawlin[] = [];
@@ -20,6 +21,12 @@ export class GnawlinManager {
   
   addGnawlin(x: number, y: number, color?: [number, number, number], parent1?: Gnawlin, parent2?: Gnawlin): void {
     this.gnawlins.push(new Gnawlin(x, y, color, parent1, parent2));
+  }
+
+  getParentageRecord(id: number): ParentageRecord | undefined {
+    const gnawlin = this.gnawlins.find((g) => g.id === id);
+    if (!gnawlin) return undefined;
+    return { id: gnawlin.id, parent1Id: gnawlin.parent1Id, parent2Id: gnawlin.parent2Id };
   }
   
   /**

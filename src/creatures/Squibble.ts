@@ -18,6 +18,9 @@ import {
   DEFAULT_MUTATION_CONFIG,
   MULTI_ALLELE_TRAITS,
   getMultiAllelePhenotype,
+  getMutationConfigForParents,
+  ParentageLookup,
+  MutationConfig,
 } from '../genetics/Genetics';
 
 export class Squibble {
@@ -155,7 +158,14 @@ export class Squibble {
   public parent2Id: number | null = null; // Father ID (or second parent ID)
   public mateIds: number[] = []; // All breeding partners this squibble has mated with
   
-  constructor(x: number, y: number, color?: RGB, parent1?: Squibble, parent2?: Squibble) {
+  constructor(
+    x: number,
+    y: number,
+    color?: RGB,
+    parent1?: Squibble,
+    parent2?: Squibble,
+    mutationConfig?: MutationConfig
+  ) {
     // Assign unique ID
     this.id = Squibble.nextId++;
     
@@ -168,8 +178,11 @@ export class Squibble {
     
     // Genetics: inherit from parents or generate randomly
     if (parent1 && parent2) {
-      // Inherit genome from parents with mutations
-      this.genome = inheritGenome(parent1.genome, parent2.genome, DEFAULT_MUTATION_CONFIG);
+      this.genome = inheritGenome(
+        parent1.genome,
+        parent2.genome,
+        mutationConfig ?? DEFAULT_MUTATION_CONFIG
+      );
     } else {
       // Generate random genome
       this.genome = generateRandomGenome();
@@ -527,95 +540,69 @@ export class Squibble {
     
     // Check if we need to seek water (same threshold as hunger / mating hydration expectation)
     const seekingWater = this.thirst < this.thirstThreshold;
-    
-    // Priority: Food > Water > Mate > Wander
-    if (seekingFood && foodManager) {
+    const inDesert = (getBiomeAt?.(this.x, this.y) ?? -1) === Biome.DESERT;
+    const thirstyInDesert = seekingWater && inDesert;
+
+    // Priority: desert thirst survival > food > water > mate > wander
+    if (thirstyInDesert && waterMap) {
+      if (this.steerForDesertThirst(foodManager, waterMap, getBiomeAt)) {
+        this.directionChangeTimer = 0;
+      }
+    } else if (seekingFood && foodManager) {
       const nearestFood = foodManager.getNearestFood(this.x, this.y, this.effectiveVision);
       if (nearestFood) {
-        // Move towards the food immediately
         const dx = nearestFood.x - this.x;
         const dy = nearestFood.y - this.y;
         this.direction = Math.atan2(dy, dx);
         this.directionChangeTimer = 0;
       }
     } else if (seekingWater && waterMap) {
-      // Special behavior: if in desert and thirsty, try cacti first, then explore out of desert
-      const currentBiome = getBiomeAt?.(this.x, this.y) ?? -1;
-      const inDesert = currentBiome === Biome.DESERT;
-      
-      if (inDesert && foodManager) {
-        // First, try to find a cactus (cacti restore thirst)
-        const nearestCactus = foodManager.getNearestCactus(this.x, this.y, this.effectiveVision);
-        if (nearestCactus) {
-          // Move towards the cactus
-          const dx = nearestCactus.x - this.x;
-          const dy = nearestCactus.y - this.y;
-          this.direction = Math.atan2(dy, dx);
-          this.directionChangeTimer = 0;
-        } else {
-          // No cactus found - try to explore out of desert to find water
-          const exitDirection = this.findDesertExitDirection(getBiomeAt);
-          if (exitDirection !== null) {
-            this.direction = exitDirection;
-            this.directionChangeTimer = 0;
-          } else {
-            // Fallback: try normal water seeking
-            const nearestWater = waterMap.findNearestWater(this.x, this.y, this.effectiveVision);
-            if (nearestWater) {
-              const dx = nearestWater.x - this.x;
-              const dy = nearestWater.y - this.y;
-              this.direction = Math.atan2(dy, dx);
-              this.directionChangeTimer = 0;
-            }
-          }
-        }
-      } else {
-        // Normal water seeking (not in desert)
-        const nearestWater = waterMap.findNearestWater(this.x, this.y, this.effectiveVision);
-        if (nearestWater) {
-          // Move towards the water
-          const dx = nearestWater.x - this.x;
-          const dy = nearestWater.y - this.y;
-          this.direction = Math.atan2(dy, dx);
-          this.directionChangeTimer = 0;
-        }
+      if (this.steerTowardWater(waterMap)) {
+        this.directionChangeTimer = 0;
       }
-                } else if (this.seekingMate && squibbleManager) {
-                  // Seek a mate
-                  const potentialMate = squibbleManager.findPotentialMate(this, waterMap);
-                  if (potentialMate) {
-        // Move towards the potential mate
+    } else if (this.seekingMate && squibbleManager) {
+      const potentialMate = squibbleManager.findPotentialMate(this, waterMap);
+      if (potentialMate) {
         const dx = potentialMate.x - this.x;
         const dy = potentialMate.y - this.y;
         this.direction = Math.atan2(dy, dx);
         this.directionChangeTimer = 0;
       }
     }
-    
-    // Change direction based on behavior
+
+    // Periodic direction refresh (must not random-wander while seeking water)
     this.directionChangeTimer += 1;
     if (this.directionChangeTimer >= this.directionChangeInterval) {
-      if (seekingFood && foodManager) {
+      if (thirstyInDesert && waterMap) {
+        if (this.steerForDesertThirst(foodManager, waterMap, getBiomeAt)) {
+          this.directionChangeInterval = 18 + Math.floor(Math.random() * 32);
+        } else if (Math.random() < 0.25) {
+          this.direction = Math.random() * 2 * Math.PI;
+          this.directionChangeInterval = 40 + Math.floor(Math.random() * 60);
+        }
+      } else if (seekingWater && waterMap) {
+        if (this.steerTowardWater(waterMap)) {
+          this.directionChangeInterval = 15 + Math.floor(Math.random() * 45);
+        } else if (Math.random() < 0.3) {
+          this.direction = Math.random() * 2 * Math.PI;
+          this.directionChangeInterval = 50 + Math.floor(Math.random() * 70);
+        }
+      } else if (seekingFood && foodManager) {
         const nearestFood = foodManager.getNearestFood(this.x, this.y, this.effectiveVision);
         if (nearestFood) {
-          // Move towards the food
           const dx = nearestFood.x - this.x;
           const dy = nearestFood.y - this.y;
           this.direction = Math.atan2(dy, dx);
-          this.directionChangeInterval = 15 + Math.floor(Math.random() * 45); // 15-60
-        } else {
-          // No food found, wander randomly
-          if (Math.random() < 0.3) {
-            this.direction = Math.random() * 2 * Math.PI;
-          }
-          this.directionChangeInterval = 60 + Math.floor(Math.random() * 120); // 60-180
+          this.directionChangeInterval = 15 + Math.floor(Math.random() * 45);
+        } else if (Math.random() < 0.3) {
+          this.direction = Math.random() * 2 * Math.PI;
+          this.directionChangeInterval = 60 + Math.floor(Math.random() * 120);
         }
       } else {
-        // Normal random movement when not hungry
         this.direction = Math.random() * 2 * Math.PI;
-        this.directionChangeInterval = 30 + Math.floor(Math.random() * 90); // 30-120
+        this.directionChangeInterval = 30 + Math.floor(Math.random() * 90);
       }
-      
+
       this.directionChangeTimer = 0;
     }
     
@@ -781,49 +768,83 @@ export class Squibble {
   }
   
   /**
-   * Find a direction that leads out of the desert biome
-   * Samples multiple directions and picks one that leads to non-desert biomes
+   * Thirsty in desert: cactus if visible, else head toward biome/water exit, else nearest water.
    */
-  private findDesertExitDirection(getBiomeAt?: (x: number, y: number) => number): number | null {
+  private steerForDesertThirst(
+    foodManager: FoodManager | undefined,
+    waterMap: WaterMap,
+    getBiomeAt?: (x: number, y: number) => number
+  ): boolean {
+    if (foodManager) {
+      const nearestCactus = foodManager.getNearestCactus(this.x, this.y, this.effectiveVision);
+      if (nearestCactus) {
+        this.direction = Math.atan2(nearestCactus.y - this.y, nearestCactus.x - this.x);
+        return true;
+      }
+    }
+
+    const exitDirection = this.findDesertExitDirection(getBiomeAt, waterMap);
+    if (exitDirection !== null) {
+      this.direction = exitDirection;
+      return true;
+    }
+
+    return this.steerTowardWater(waterMap);
+  }
+
+  private steerTowardWater(waterMap: WaterMap): boolean {
+    const nearestWater = waterMap.findNearestWater(this.x, this.y, this.effectiveVision);
+    if (!nearestWater) return false;
+    this.direction = Math.atan2(nearestWater.y - this.y, nearestWater.x - this.x);
+    return true;
+  }
+
+  /**
+   * Pick a heading that leaves the desert, preferring directions toward water or wet biomes.
+   */
+  private findDesertExitDirection(
+    getBiomeAt?: (x: number, y: number) => number,
+    waterMap?: WaterMap
+  ): number | null {
     if (!getBiomeAt) return null;
-    
-    const sampleDistance = this.effectiveVision * 0.5; // Sample at half vision range
-    const numSamples = 16; // Sample 16 directions around the circle
-    const bestDirections: number[] = [];
-    
+
+    const numSamples = 24;
+    const distances = [
+      this.effectiveVision * 0.45,
+      this.effectiveVision * 0.9,
+      this.effectiveVision * 1.25,
+    ].filter((d) => d >= 12);
+
+    let bestAngle: number | null = null;
+    let bestScore = 0;
+    let bestHeadingDiff = Infinity;
+
     for (let i = 0; i < numSamples; i++) {
       const angle = (i / numSamples) * 2 * Math.PI;
-      const sampleX = this.x + Math.cos(angle) * sampleDistance;
-      const sampleY = this.y + Math.sin(angle) * sampleDistance;
-      const sampleBiome = getBiomeAt(sampleX, sampleY);
-      
-      // Prefer directions that lead to non-desert biomes (plains, forest, tundra, or water)
-      if (sampleBiome !== Biome.DESERT && sampleBiome !== -1) {
-        bestDirections.push(angle);
-      }
-    }
-    
-    // If we found good directions, pick one (prefer straight ahead if possible)
-    if (bestDirections.length > 0) {
-      // Try to find one close to current direction
-      let bestDir = bestDirections[0];
-      let bestDiff = Math.abs(this.direction - bestDir);
-      if (bestDiff > Math.PI) bestDiff = 2 * Math.PI - bestDiff;
-      
-      for (const dir of bestDirections) {
-        let diff = Math.abs(this.direction - dir);
-        if (diff > Math.PI) diff = 2 * Math.PI - diff;
-        if (diff < bestDiff) {
-          bestDiff = diff;
-          bestDir = dir;
+      let score = 0;
+      for (const dist of distances) {
+        const sampleX = this.x + Math.cos(angle) * dist;
+        const sampleY = this.y + Math.sin(angle) * dist;
+        const sampleBiome = getBiomeAt(sampleX, sampleY);
+        if (sampleBiome === Biome.WATER || waterMap?.isWaterAt(sampleX, sampleY)) {
+          score += 5;
+        } else if (sampleBiome !== Biome.DESERT && sampleBiome !== -1) {
+          score += 2;
         }
       }
-      
-      return bestDir;
+      if (score <= 0) continue;
+
+      let headingDiff = Math.abs(this.direction - angle);
+      if (headingDiff > Math.PI) headingDiff = 2 * Math.PI - headingDiff;
+
+      if (score > bestScore || (score === bestScore && headingDiff < bestHeadingDiff)) {
+        bestScore = score;
+        bestHeadingDiff = headingDiff;
+        bestAngle = angle;
+      }
     }
-    
-    // No good direction found - return null to fall back to normal water seeking
-    return null;
+
+    return bestScore > 0 ? bestAngle : null;
   }
   
   getStats() {
@@ -991,6 +1012,7 @@ export class Squibble {
       const gnawlin = other.combatTarget as Gnawlin;
       if (!gnawlin.alive || !gnawlin.isInCombat) continue;
       if (gnawlin.combatTarget !== other) continue;
+      if (!gnawlin.canAcceptCombatAssistant()) continue;
 
       const dx = other.x - this.x;
       const dy = other.y - this.y;
@@ -1226,8 +1248,18 @@ export class Squibble {
    * Returns array of babies (can be 1-4)
    * May kill the mother if risk is high
    */
-  giveBirth(): Squibble[] {
+  giveBirth(parentageLookup?: ParentageLookup): Squibble[] {
     if (!this.isPregnant || !this.pregnancyFather) return [];
+
+    const mutationConfig = getMutationConfigForParents(
+      { id: this.id, parent1Id: this.parent1Id, parent2Id: this.parent2Id },
+      {
+        id: this.pregnancyFather.id,
+        parent1Id: this.pregnancyFather.parent1Id,
+        parent2Id: this.pregnancyFather.parent2Id,
+      },
+      parentageLookup
+    );
     
     // Determine actual litter size
     const actualLitterSize = this.determineLitterSize();
@@ -1257,7 +1289,7 @@ export class Squibble {
       const babyX = this.x + Math.cos(angle) * offset;
       const babyY = this.y + Math.sin(angle) * offset;
       
-      const baby = new Squibble(babyX, babyY, undefined, this, this.pregnancyFather);
+      const baby = new Squibble(babyX, babyY, undefined, this, this.pregnancyFather, mutationConfig);
       babies.push(baby);
     }
     

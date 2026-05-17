@@ -25,6 +25,95 @@ export const DEFAULT_MUTATION_CONFIG: MutationConfig = {
   alleleMutationRate: 0.02,     // 2% chance for multi-allele mutation
 };
 
+/** Raised mutation rates when parents share ancestry (inbreeding). */
+export const INBREEDING_MUTATION_CONFIG: MutationConfig = {
+  mutationRate: 0.14,
+  polygenicMutationMagnitude: 1.5,
+  alleleMutationRate: 0.06,
+};
+
+export interface ParentageRecord {
+  id: number;
+  parent1Id: number | null;
+  parent2Id: number | null;
+}
+
+export type ParentageLookup = (id: number) => ParentageRecord | undefined;
+
+export function shareParent(a: ParentageRecord, b: ParentageRecord): boolean {
+  if (a.parent1Id === null && a.parent2Id === null) return false;
+  if (b.parent1Id === null && b.parent2Id === null) return false;
+  const aParents = [a.parent1Id, a.parent2Id].filter((id): id is number => id !== null);
+  const bParents = [b.parent1Id, b.parent2Id].filter((id): id is number => id !== null);
+  return aParents.some((id) => bParents.includes(id));
+}
+
+/**
+ * Collect ancestor IDs up to maxDepth generations (parents, grandparents, etc.).
+ */
+export function getAncestorIds(
+  creature: ParentageRecord,
+  lookup: ParentageLookup,
+  maxDepth: number = 4
+): Set<number> {
+  const ancestors = new Set<number>();
+  const queue: Array<{ id: number; depth: number }> = [];
+  if (creature.parent1Id !== null) queue.push({ id: creature.parent1Id, depth: 1 });
+  if (creature.parent2Id !== null) queue.push({ id: creature.parent2Id, depth: 1 });
+
+  while (queue.length > 0) {
+    const { id, depth } = queue.shift()!;
+    if (ancestors.has(id)) continue;
+    ancestors.add(id);
+    if (depth >= maxDepth) continue;
+    const parent = lookup(id);
+    if (!parent) continue;
+    if (parent.parent1Id !== null) queue.push({ id: parent.parent1Id, depth: depth + 1 });
+    if (parent.parent2Id !== null) queue.push({ id: parent.parent2Id, depth: depth + 1 });
+  }
+  return ancestors;
+}
+
+/**
+ * True when parents are related by blood (siblings, parent/child, cousins, etc.).
+ */
+export function areFamiliallyRelated(
+  parentA: ParentageRecord,
+  parentB: ParentageRecord,
+  lookup?: ParentageLookup
+): boolean {
+  if (parentA.id === parentB.id) return true;
+  if (
+    parentA.parent1Id === parentB.id ||
+    parentA.parent2Id === parentB.id ||
+    parentB.parent1Id === parentA.id ||
+    parentB.parent2Id === parentA.id
+  ) {
+    return true;
+  }
+  if (shareParent(parentA, parentB)) return true;
+
+  if (!lookup) return false;
+
+  const ancestorsA = getAncestorIds(parentA, lookup, 4);
+  const ancestorsB = getAncestorIds(parentB, lookup, 4);
+  if (ancestorsB.has(parentA.id) || ancestorsA.has(parentB.id)) return true;
+  for (const id of ancestorsA) {
+    if (ancestorsB.has(id)) return true;
+  }
+  return false;
+}
+
+export function getMutationConfigForParents(
+  parentA: ParentageRecord,
+  parentB: ParentageRecord,
+  lookup?: ParentageLookup
+): MutationConfig {
+  return areFamiliallyRelated(parentA, parentB, lookup)
+    ? INBREEDING_MUTATION_CONFIG
+    : DEFAULT_MUTATION_CONFIG;
+}
+
 // ============================================
 // MODEL B: MULTI-ALLELE TRAITS
 // ============================================
