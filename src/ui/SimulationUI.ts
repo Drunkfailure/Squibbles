@@ -109,9 +109,10 @@ export class SimulationUI {
         'ESC - Deselect/Quit',
         '',
         'Camera:',
-        'Arrow Keys - Move camera',
-        '[ - Zoom out',
-        '] - Zoom in'
+        'Arrows - Pan',
+        'Q / E - Rotate view',
+        'T / F - Tilt (see hillsides)',
+        '[ / ] - Zoom'
       );
     }
     

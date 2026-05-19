@@ -5,7 +5,14 @@
 import { RGB, Point } from '../utils/types';
 import { Squibble } from './Squibble';
 import { WaterMap } from '../terrain/WaterMap';
+import { HeightMap } from '../terrain/HeightMap';
 import { Biome } from '../terrain/Biome';
+import {
+  ClimbState,
+  createClimbState,
+  getClimbWorldPosition,
+  updateTerrainMovement,
+} from '../terrain/TerrainMovement';
 import {
   Genome,
   ExpressedPhenotypes,
@@ -115,6 +122,19 @@ export class Gnawlin {
   
   // Water crossing target (set when entering water, cleared when reaching land)
   private waterCrossingTarget: { x: number; y: number } | null = null;
+
+  public climb: ClimbState = createClimbState();
+
+  getFootPosition(heightMap: HeightMap): { x: number; y: number; z: number } {
+    if (this.climb.isClimbing) {
+      return getClimbWorldPosition(this.climb, heightMap.getTileSize());
+    }
+    return {
+      x: this.x,
+      y: this.y,
+      z: heightMap.getSurfaceWorldZ(this.x, this.y),
+    };
+  }
   
     // Speed-based consumption rates (slower than squibbles - gnawlins have slower metabolism)
     private baseHungerRate: number = 0.38; // Slower than squibbles (0.5) but hunts more often
@@ -282,7 +302,8 @@ export class Gnawlin {
     squibbleManager?: any, // For finding prey (Squibbles)
     waterMap?: WaterMap,
     gnawlinManager?: any, // GnawlinManager for finding mates
-    getBiomeAt?: (x: number, y: number) => number
+    getBiomeAt?: (x: number, y: number) => number,
+    heightMap?: HeightMap
   ): void {
     if (!this.alive) {
       return;
@@ -616,8 +637,24 @@ export class Gnawlin {
       
       // Only move if not in combat (combat handles positioning separately)
       if (!this.isInCombat) {
-        this.x += Math.cos(this.direction) * effectiveSpeed;
-        this.y += Math.sin(this.direction) * effectiveSpeed;
+        if (heightMap) {
+          const terrain = updateTerrainMovement(dt, {
+            x: this.x,
+            y: this.y,
+            direction: this.direction,
+            stepDistance: effectiveSpeed,
+            creatureSize: this.currentSize,
+            climb: this.climb,
+            heightMap,
+            waterMap,
+          });
+          this.x = terrain.x;
+          this.y = terrain.y;
+          this.direction = terrain.direction;
+        } else {
+          this.x += Math.cos(this.direction) * effectiveSpeed;
+          this.y += Math.sin(this.direction) * effectiveSpeed;
+        }
       }
       
       // Just left water: apply wet for 30 seconds and clear crossing target

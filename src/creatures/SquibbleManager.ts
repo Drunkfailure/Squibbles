@@ -5,6 +5,7 @@
 import { Squibble } from './Squibble';
 import { FoodManager } from '../food/FoodManager';
 import { WaterMap } from '../terrain/WaterMap';
+import { HeightMap } from '../terrain/HeightMap';
 import { Stats } from '../utils/types';
 import { ParentageRecord } from '../genetics/Genetics';
 
@@ -238,11 +239,22 @@ export class SquibbleManager {
     foodManager?: FoodManager,
     waterMap?: WaterMap,
     getBiomeAt?: (x: number, y: number) => number,
-    gnawlinManager?: any // GnawlinManager for predator detection
+    gnawlinManager?: any, // GnawlinManager for predator detection
+    heightMap?: HeightMap
   ): void {
     // Update all squibbles
     for (const squibble of this.squibbles) {
-      squibble.update(dt, screenWidth, screenHeight, foodManager, waterMap, this, getBiomeAt, gnawlinManager);
+      squibble.update(
+        dt,
+        screenWidth,
+        screenHeight,
+        foodManager,
+        waterMap,
+        this,
+        getBiomeAt,
+        gnawlinManager,
+        heightMap
+      );
     }
     
     // Process breeding

@@ -3,7 +3,7 @@
  */
 
 import { Game, GameSettings } from './Game';
-import { Container, Graphics, Sprite } from 'pixi.js';
+import { Container, Graphics } from 'pixi.js';
 import { AssetLoader } from '../utils/AssetLoader';
 import { SquibbleManager } from '../creatures/SquibbleManager';
 import { Squibble } from '../creatures/Squibble';
@@ -12,9 +12,13 @@ import { Gnawlin } from '../creatures/Gnawlin';
 import { FoodManager } from '../food/FoodManager';
 import { generateWorld, WorldData } from '../terrain/WorldGenerator';
 import { WaterMap } from '../terrain/WaterMap';
+import { HeightMap } from '../terrain/HeightMap';
 import { Biome } from '../terrain/Biome';
-import { TerrainRenderer } from '../terrain/TerrainRenderer';
+import { TerrainVoxelRenderer } from '../terrain/TerrainVoxelRenderer';
+import { WorldRenderer } from '../render/WorldRenderer';
+import { SceneDrawable, renderEntityDrawables, renderTerrainToGraphics } from '../render/SceneDrawQueue';
 import { Renderer } from './Renderer';
+import { Camera3D } from '../render/Camera3D';
 import { EventManager } from './EventManager';
 import { SimulationUI } from '../ui/SimulationUI';
 import { StatsRecorder } from '../stats/StatsRecorder';
@@ -27,17 +31,17 @@ export class Simulation extends Game {
   private gnawlinManager: GnawlinManager;
   private foodManager: FoodManager;
   private waterMap: WaterMap | null = null;
+  private heightMap: HeightMap | null = null;
   private worldData: WorldData | null = null;
-  private terrainRenderer: TerrainRenderer;
-  
-  // Camera
-  private cameraX: number = 0;
-  private cameraY: number = 0;
-  private zoomLevel: number = 1.0;
-  private minZoom: number = 0.5;
-  private maxZoom: number = 2.0;
-  private zoomSpeed: number = 0.1;
-  private cameraMoveSpeed: number = 10;
+  private terrainVoxelRenderer: TerrainVoxelRenderer;
+  private terrainGraphics: Graphics;
+  private worldRenderer: WorldRenderer | null = null;
+  private camera3d: Camera3D;
+
+  private zoomSpeed: number = 0.08;
+  private cameraMoveSpeed: number = 14;
+  private cameraRotateSpeed: number = 0.04;
+  private cameraPitchSpeed: number = 0.03;
   private selectedCreature: Squibble | Gnawlin | null = null;
   
   // Rendering containers
@@ -74,7 +78,15 @@ export class Simulation extends Game {
       settings.mapHeight,
       settings.foodCount ?? 200
     );
-    this.terrainRenderer = new TerrainRenderer();
+    this.terrainVoxelRenderer = new TerrainVoxelRenderer();
+    this.terrainGraphics = new Graphics();
+    this.camera3d = new Camera3D(settings.screenWidth, settings.screenHeight);
+    this.camera3d.focusX = settings.mapWidth / 2;
+    this.camera3d.focusY = settings.mapHeight / 2;
+    this.camera3d.zoom = Math.min(
+      settings.screenWidth / settings.mapWidth,
+      settings.screenHeight / settings.mapHeight
+    ) * 0.92;
     this.ui = new SimulationUI(settings.screenWidth, settings.screenHeight);
     
     // Stats tracking
@@ -98,9 +110,14 @@ export class Simulation extends Game {
     this.entityContainer = new Container();
     this.uiContainer = new Container();
     
-    // Calculate camera offset to center the map
-    this.cameraX = (settings.screenWidth - settings.mapWidth) / 2;
-    this.cameraY = (settings.screenHeight - settings.mapHeight) / 2;
+  }
+
+  private get zoomLevel(): number {
+    return this.camera3d.zoom;
+  }
+
+  private set zoomLevel(z: number) {
+    this.camera3d.zoom = Math.max(this.camera3d.minZoom, Math.min(this.camera3d.maxZoom, z));
   }
   
   async initialize(onProgress?: (progress: number, message: string) => void): Promise<void> {
@@ -109,6 +126,10 @@ export class Simulation extends Game {
     const app = this.getApp();
     
     // Add containers to stage
+    this.terrainContainer.addChild(this.terrainGraphics);
+    this.terrainContainer.zIndex = 0;
+    this.entityContainer.zIndex = 10;
+    app.stage.sortableChildren = true;
     app.stage.addChild(this.terrainContainer);
     app.stage.addChild(this.entityContainer);
     app.stage.addChild(this.uiContainer);
@@ -175,10 +196,22 @@ export class Simulation extends Game {
       this.worldData.rows,
       this.worldData.cols
     );
-    
-    // Render terrain
-    this.terrainRenderer.createTerrainSprite(this.worldData, this.terrainContainer);
-    
+
+    this.heightMap = new HeightMap(
+      this.worldData.heightGrid,
+      this.worldData.waterMask,
+      this.worldData.tileSize,
+      this.worldData.rows,
+      this.worldData.cols
+    );
+    this.worldRenderer = new WorldRenderer(
+      this.entityContainer,
+      this.renderer,
+      this.camera3d,
+      this.heightMap,
+      this.waterMap
+    );
+
     // Spawn foods with biome awareness
     this.foodManager.spawnFood(
       this.worldData.biomeGrid,
@@ -291,7 +324,8 @@ export class Simulation extends Game {
         this.foodManager,
         this.waterMap || undefined,
         getBiomeAt,
-        this.gnawlinManager // Pass gnawlinManager for predator detection
+        this.gnawlinManager,
+        this.heightMap || undefined
       );
       this.gnawlinManager.updateAll(
         dt,
@@ -299,7 +333,8 @@ export class Simulation extends Game {
         this.settings.mapHeight,
         this.squibbleManager,
         this.waterMap || undefined,
-        getBiomeAt
+        getBiomeAt,
+        this.heightMap || undefined
       );
       this.foodManager.update(dt);
       
@@ -468,207 +503,175 @@ export class Simulation extends Game {
   }
   
   private handleCameraMovement(): void {
-    // If a squibble is selected, automatically follow it
+    const events = this.getEventManager();
+    const pan = this.cameraMoveSpeed / Math.max(0.5, this.zoomLevel);
+
     if (this.selectedCreature && this.selectedCreature.alive) {
-      // Center camera on the selected creature (works with any zoom level)
-      this.cameraX = this.settings.screenWidth / 2 - this.selectedCreature.x * this.zoomLevel;
-      this.cameraY = this.settings.screenHeight / 2 - this.selectedCreature.y * this.zoomLevel;
+      this.camera3d.focusX = this.selectedCreature.x;
+      this.camera3d.focusY = this.selectedCreature.y;
     } else {
-      // Manual camera movement (only when nothing is selected)
-      const events = this.getEventManager();
-      
-      if (events.isKeyPressed('ArrowLeft')) {
-        this.cameraX += this.cameraMoveSpeed;
+      if (events.isKeyPressed('ArrowLeft')) this.camera3d.focusX -= pan;
+      if (events.isKeyPressed('ArrowRight')) this.camera3d.focusX += pan;
+      if (events.isKeyPressed('ArrowUp')) this.camera3d.focusY -= pan;
+      if (events.isKeyPressed('ArrowDown')) this.camera3d.focusY += pan;
+
+      if (events.isKeyPressed('KeyQ')) this.camera3d.yaw -= this.cameraRotateSpeed;
+      if (events.isKeyPressed('KeyE')) this.camera3d.yaw += this.cameraRotateSpeed;
+      if (events.isKeyPressed('KeyT')) {
+        this.camera3d.pitch = Math.min(
+          this.camera3d.maxPitch,
+          this.camera3d.pitch + this.cameraPitchSpeed
+        );
       }
-      if (events.isKeyPressed('ArrowRight')) {
-        this.cameraX -= this.cameraMoveSpeed;
-      }
-      if (events.isKeyPressed('ArrowUp')) {
-        this.cameraY += this.cameraMoveSpeed;
-      }
-      if (events.isKeyPressed('ArrowDown')) {
-        this.cameraY -= this.cameraMoveSpeed;
+      if (events.isKeyPressed('KeyF')) {
+        this.camera3d.pitch = Math.max(
+          this.camera3d.minPitch,
+          this.camera3d.pitch - this.cameraPitchSpeed
+        );
       }
     }
-    
-    // Handle zoom with [ and ]
-    // Note: Key handling for brackets will be done in setupInputHandling override
+
+    this.camera3d.focusX = Math.max(0, Math.min(this.settings.mapWidth, this.camera3d.focusX));
+    this.camera3d.focusY = Math.max(0, Math.min(this.settings.mapHeight, this.camera3d.focusY));
   }
   
   private draw(): void {
-    // Clear entity container
-    this.entityContainer.removeChildren();
-    
-    // Update camera/zoom transforms
-    const screenW = this.settings.screenWidth;
-    const screenH = this.settings.screenHeight;
-    const viewW = screenW / this.zoomLevel;
-    const viewH = screenH / this.zoomLevel;
-    let viewX = -this.cameraX / this.zoomLevel;
-    let viewY = -this.cameraY / this.zoomLevel;
-    
-    // Clamp view
-    viewX = Math.max(0, Math.min(this.settings.mapWidth - viewW, viewX));
-    viewY = Math.max(0, Math.min(this.settings.mapHeight - viewH, viewY));
-    
-    // Update terrain position
-    if (this.terrainContainer.children.length > 0) {
-      const terrainSprite = this.terrainContainer.children[0] as Sprite;
-      terrainSprite.x = -viewX * this.zoomLevel;
-      terrainSprite.y = -viewY * this.zoomLevel;
-      terrainSprite.scale.set(this.zoomLevel);
+    // Terrain on its own layer (always behind entities)
+    this.terrainGraphics.clear();
+    const terrainDrawables: SceneDrawable[] = [];
+    if (this.worldData && this.heightMap) {
+      this.terrainVoxelRenderer.collectDrawables(
+        terrainDrawables,
+        this.worldData,
+        this.heightMap,
+        this.camera3d
+      );
+      renderTerrainToGraphics(this.terrainGraphics, terrainDrawables);
     }
-    
-    // Y-sort: collect trees, food, and squibbles; sort by bottom Y (higher Y = in front)
-    const drawables: Array<{ sortY: number; draw: () => void }> = [];
-    const baseSize = Simulation.TREE_FOOD_SPRITE_WORLD_SIZE;
-    
-    // Decorative trees (smaller than tile, varied scale, jittered position)
-    const decorativeTrees = this.foodManager.getDecorativeTrees();
-    for (const tree of decorativeTrees) {
-      if (tree.x >= viewX && tree.x < viewX + viewW &&
-          tree.y >= viewY && tree.y < viewY + viewH) {
-        const sx = (tree.x - viewX) * this.zoomLevel;
-        const sy = (tree.y - viewY) * this.zoomLevel;
-        const texture = AssetLoader.getFoodTexture('foresttree', 0);
+
+    this.entityContainer.removeChildren();
+    this.entityContainer.sortableChildren = true;
+
+    const propDrawables: SceneDrawable[] = [];
+    const creatureDrawables: SceneDrawable[] = [];
+
+    const wr = this.worldRenderer;
+    if (wr) {
+      const baseSize = Simulation.TREE_FOOD_SPRITE_WORLD_SIZE;
+      const zoom = this.zoomLevel;
+      const { halfW, halfH } = this.camera3d.getViewHalfExtents();
+      const inView = (x: number, y: number) =>
+        Math.abs(x - this.camera3d.focusX) < halfW && Math.abs(y - this.camera3d.focusY) < halfH;
+
+      const decorativeTrees = this.foodManager.getDecorativeTrees();
+      for (const tree of decorativeTrees) {
+        if (!inView(tree.x, tree.y)) continue;
         const scale = tree.scale ?? 1;
         const size = baseSize * scale;
+        const foot = size * 0.45;
+        const { sx, footSy, sortY } = wr.getEntityScreen(tree.x, tree.y, foot);
+        const texture = AssetLoader.getFoodTexture('foresttree', 0);
         const flipH = tree.flipH ?? false;
-        drawables.push({
-          sortY: tree.y + size / 2,
-          draw: () => {
-            if (texture) {
-              const sprite = new Sprite(texture);
-              const px = Math.max(1, size * this.zoomLevel);
-              sprite.width = px;
-              sprite.height = px;
-              sprite.anchor.set(0.5);
-              if (flipH) sprite.scale.x = -Math.abs(sprite.scale.x);
-              sprite.x = sx;
-              sprite.y = sy;
-              this.entityContainer.addChild(sprite);
-            }
+        propDrawables.push({
+          depth: sortY,
+          kind: 'entity',
+          drawEntity: (parent) => {
+            if (!texture) return;
+            const px = Math.max(1, size * zoom);
+            wr.drawBlobShadow(parent, sx, footSy, px * 0.4);
+            wr.drawPropSprite(parent, texture, sx, footSy, px, flipH);
           },
         });
       }
-    }
-    
-    // Foods (same: smaller than tile, varied scale, jittered position)
-    const foods = this.foodManager.getAllFood();
-    for (const food of foods) {
-      if (food.x >= viewX && food.x < viewX + viewW &&
-          food.y >= viewY && food.y < viewY + viewH) {
-        const sx = (food.x - viewX) * this.zoomLevel;
-        const sy = (food.y - viewY) * this.zoomLevel;
-        const texture = AssetLoader.getFoodTexture(food.species, food.remainingSlots);
+
+      const foods = this.foodManager.getAllFood();
+      for (const food of foods) {
+        if (!inView(food.x, food.y)) continue;
         const scale = food.scale ?? 1;
         const size = baseSize * scale;
+        const foot = size * 0.45;
+        const { sx, footSy, sortY } = wr.getEntityScreen(food.x, food.y, foot);
+        const texture = AssetLoader.getFoodTexture(food.species, food.remainingSlots);
         const flipH = food.flipH ?? false;
-        drawables.push({
-          sortY: food.y + size / 2,
-          draw: () => {
+        propDrawables.push({
+          depth: sortY,
+          kind: 'entity',
+          drawEntity: (parent) => {
             if (texture) {
-              const sprite = new Sprite(texture);
-              const px = Math.max(1, size * this.zoomLevel);
-              sprite.width = px;
-              sprite.height = px;
-              sprite.anchor.set(0.5);
-              if (flipH) sprite.scale.x = -Math.abs(sprite.scale.x);
-              sprite.x = sx;
-              sprite.y = sy;
-              this.entityContainer.addChild(sprite);
+              const px = Math.max(1, size * zoom);
+              wr.drawBlobShadow(parent, sx, footSy, px * 0.35);
+              wr.drawPropSprite(parent, texture, sx, footSy, px, flipH);
             } else {
-              const radius = food.radius * this.zoomLevel;
-              this.renderer.drawCircle(sx, sy, radius, [0, 255, 0], 0.8);
+              const radius = food.radius * zoom;
+              wr.drawBlobShadow(parent, sx, footSy, radius * 0.5);
+              const layerRenderer = new Renderer(parent);
+              layerRenderer.drawCircle(sx, footSy - radius, radius, [0, 255, 0], 0.8);
             }
           },
         });
       }
-    }
-    
-    // Squibbles
-    const squibbles = this.squibbleManager.getAlive();
-    for (const squibble of squibbles) {
-      if (squibble.x >= viewX && squibble.x < viewX + viewW &&
-          squibble.y >= viewY && squibble.y < viewY + viewH) {
-        const sx = (squibble.x - viewX) * this.zoomLevel;
-        const sy = (squibble.y - viewY) * this.zoomLevel;
-        const radius = Math.max(1, squibble.radius * this.zoomLevel);
-        drawables.push({
-          sortY: squibble.y + squibble.radius,
-          draw: () => {
-            this.renderer.drawCircle(sx, sy, radius, squibble.color, 1.0);
-            if (squibble.isBreeding) {
-              const loveTexture = AssetLoader.getIconTexture('love');
-              if (loveTexture) {
-                const loveSize = radius * 2 * this.zoomLevel;
-                const loveSprite = new Sprite(loveTexture);
-                loveSprite.width = loveSize;
-                loveSprite.height = loveSize;
-                loveSprite.x = sx;
-                loveSprite.y = sy - radius - loveSize * 0.8;
-                loveSprite.anchor.set(0.5, 0.5);
-                this.entityContainer.addChild(loveSprite);
-              }
-            }
-            this.drawHealthBar(sx, sy, radius, squibble.health, squibble.maxHealth, this.zoomLevel);
-            this.drawStatusIcons(sx, sy, radius, squibble, this.zoomLevel);
-            const endX = sx + Math.cos(squibble.direction) * (radius + 5) * this.zoomLevel;
-            const endY = sy + Math.sin(squibble.direction) * (radius + 5) * this.zoomLevel;
-            this.renderer.drawLine(sx, sy, endX, endY, [255, 255, 255], Math.max(1, 2 * this.zoomLevel));
+
+      const squibbles = this.squibbleManager.getAlive();
+      for (const squibble of squibbles) {
+        const foot = this.heightMap
+          ? squibble.getFootPosition(this.heightMap)
+          : { x: squibble.x, y: squibble.y, z: 0 };
+        if (!inView(foot.x, foot.y)) continue;
+        const { sx, footSy, sortY } = wr.getEntityScreen(foot.x, foot.y, squibble.radius, {
+          squibbleRadius: squibble.radius,
+          worldZ: foot.z,
+        });
+        creatureDrawables.push({
+          depth: sortY,
+          kind: 'entity',
+          drawEntity: (parent) => {
+            wr.drawSquibble(parent, squibble, sx, footSy, zoom, (footX, headY, radiusPx) => {
+              wr.drawHealthBar(
+                parent,
+                footX,
+                headY,
+                radiusPx,
+                squibble.health,
+                squibble.maxHealth,
+                zoom
+              );
+              wr.drawStatusIcons(parent, footX, headY, radiusPx, squibble, zoom);
+            });
           },
         });
       }
-    }
-    
-    // Gnawlins (render as squares)
-    const gnawlins = this.gnawlinManager.getAlive();
-    for (const gnawlin of gnawlins) {
-      if (gnawlin.x >= viewX && gnawlin.x < viewX + viewW &&
-          gnawlin.y >= viewY && gnawlin.y < viewY + viewH) {
-        const sx = (gnawlin.x - viewX) * this.zoomLevel;
-        const sy = (gnawlin.y - viewY) * this.zoomLevel;
-        const size = Math.max(1, gnawlin.currentSize * this.zoomLevel);
-        drawables.push({
-          sortY: gnawlin.y + gnawlin.currentSize,
-          draw: () => {
-            // Draw square for gnawlin
-            const halfSize = size / 2;
-            this.renderer.drawRect(
-              sx - halfSize,
-              sy - halfSize,
-              size,
-              size,
-              gnawlin.color,
-              1.0
-            );
-            if (gnawlin.isBreeding) {
-              const loveTexture = AssetLoader.getIconTexture('love');
-              if (loveTexture) {
-                const loveSize = size * 1.5 * this.zoomLevel;
-                const loveSprite = new Sprite(loveTexture);
-                loveSprite.width = loveSize;
-                loveSprite.height = loveSize;
-                loveSprite.x = sx;
-                loveSprite.y = sy - size / 2 - loveSize * 0.4;
-                loveSprite.anchor.set(0.5, 0.5);
-                this.entityContainer.addChild(loveSprite);
-              }
-            }
-            this.drawHealthBar(sx, sy, size / 2, gnawlin.health, gnawlin.maxHealth, this.zoomLevel);
-            this.drawStatusIcons(sx, sy, size / 2, gnawlin, this.zoomLevel);
-            const endX = sx + Math.cos(gnawlin.direction) * (size / 2 + 5) * this.zoomLevel;
-            const endY = sy + Math.sin(gnawlin.direction) * (size / 2 + 5) * this.zoomLevel;
-            this.renderer.drawLine(sx, sy, endX, endY, [255, 255, 255], Math.max(1, 2 * this.zoomLevel));
+
+      const gnawlins = this.gnawlinManager.getAlive();
+      for (const gnawlin of gnawlins) {
+        const foot = this.heightMap
+          ? gnawlin.getFootPosition(this.heightMap)
+          : { x: gnawlin.x, y: gnawlin.y, z: 0 };
+        if (!inView(foot.x, foot.y)) continue;
+        const { sx, footSy, sortY } = wr.getEntityScreen(foot.x, foot.y, gnawlin.currentSize, {
+          worldZ: foot.z,
+        });
+        creatureDrawables.push({
+          depth: sortY,
+          kind: 'entity',
+          drawEntity: (parent) => {
+            wr.drawGnawlin(parent, gnawlin, sx, footSy, zoom, (footX, headY, halfSizePx) => {
+              wr.drawHealthBar(
+                parent,
+                footX,
+                headY,
+                halfSizePx,
+                gnawlin.health,
+                gnawlin.maxHealth,
+                zoom
+              );
+              wr.drawStatusIcons(parent, footX, headY, halfSizePx, gnawlin, zoom);
+            });
           },
         });
       }
-    }
-    
-    // Sort by Y ascending (lower Y = behind, higher Y = in front) and draw
-    drawables.sort((a, b) => a.sortY - b.sortY);
-    for (const d of drawables) {
-      d.draw();
+
+      let z = renderEntityDrawables(this.entityContainer, propDrawables, 0);
+      renderEntityDrawables(this.entityContainer, creatureDrawables, z);
     }
     
     // Draw UI
@@ -683,26 +686,40 @@ export class Simulation extends Game {
       this.ui.drawSquibbleDetails(this.selectedCreature);
       
       // Draw selection indicator
-      if (this.selectedCreature.x >= viewX && this.selectedCreature.x < viewX + viewW &&
-          this.selectedCreature.y >= viewY && this.selectedCreature.y < viewY + viewH) {
-        const sx = (this.selectedCreature.x - viewX) * this.zoomLevel;
-        const sy = (this.selectedCreature.y - viewY) * this.zoomLevel;
-        
-        const selectionRing = new Graphics();
-        selectionRing.lineStyle(3, 0x00ffff, 1.0); // Cyan selection
-        
-        if (this.selectedCreature instanceof Squibble) {
-          // Draw circle for Squibbles
-          const radius = Math.max(1, this.selectedCreature.radius * this.zoomLevel);
-          selectionRing.drawCircle(sx, sy, radius + 3);
-        } else if (this.selectedCreature instanceof Gnawlin) {
-          // Draw square outline for Gnawlins
-          const size = Math.max(1, this.selectedCreature.currentSize * this.zoomLevel);
+      if (this.worldRenderer) {
+        const creature = this.selectedCreature;
+        if (creature instanceof Squibble) {
+          const foot = this.heightMap
+            ? creature.getFootPosition(this.heightMap)
+            : { x: creature.x, y: creature.y, z: 0 };
+          const { sx, footSy } = this.worldRenderer.getEntityScreen(
+            foot.x,
+            foot.y,
+            creature.radius,
+            { squibbleRadius: creature.radius, worldZ: foot.z }
+          );
+          const radius = Math.max(1, creature.radius * this.zoomLevel);
+          const selectionRing = new Graphics();
+          selectionRing.lineStyle(3, 0x00ffff, 1.0);
+          selectionRing.drawCircle(sx, footSy - radius * 0.88, radius + 3);
+          this.entityContainer.addChild(selectionRing);
+        } else if (creature instanceof Gnawlin) {
+          const foot = this.heightMap
+            ? creature.getFootPosition(this.heightMap)
+            : { x: creature.x, y: creature.y, z: 0 };
+          const { sx, footSy } = this.worldRenderer.getEntityScreen(
+            foot.x,
+            foot.y,
+            creature.currentSize,
+            { worldZ: foot.z }
+          );
+          const size = Math.max(1, creature.currentSize * this.zoomLevel);
           const halfSize = size / 2 + 3;
-          selectionRing.drawRect(sx - halfSize, sy - halfSize, size + 6, size + 6);
+          const selectionRing = new Graphics();
+          selectionRing.lineStyle(3, 0x00ffff, 1.0);
+          selectionRing.drawRect(sx - halfSize, footSy - size, size + 6, size + 6);
+          this.entityContainer.addChild(selectionRing);
         }
-        
-        this.entityContainer.addChild(selectionRing);
       }
     } else {
       // No selection or creature died - clear the details panel
@@ -723,10 +740,12 @@ export class Simulation extends Game {
         // Pause/Resume
         e.preventDefault();
         this.togglePause();
-      } else if (e.code === 'BracketLeft') { // [
-        this.zoomLevel = Math.max(this.minZoom, this.zoomLevel - this.zoomSpeed);
-      } else if (e.code === 'BracketRight') { // ]
-        this.zoomLevel = Math.min(this.maxZoom, this.zoomLevel + this.zoomSpeed);
+      } else if (e.code === 'BracketLeft') {
+        this.zoomLevel -= this.zoomSpeed;
+      } else if (e.code === 'BracketRight') {
+        this.zoomLevel += this.zoomSpeed;
+      } else if (e.code === 'KeyG') {
+        this.statsGraphRenderer.show();
       } else if (e.code === 'KeyR') {
         // Reset simulation
         this.squibbleManager.clear();
@@ -757,9 +776,6 @@ export class Simulation extends Game {
       } else if (e.code === 'KeyI') {
         // Toggle controls
         this.ui.toggleControls();
-      } else if (e.code === 'KeyG') {
-        // Show stats graphs
-        this.statsGraphRenderer.show();
       } else if (e.code === 'Escape') {
         // Handle ESC with priority: graphs > menu > selection
         if (this.statsGraphRenderer.isGraphVisible()) {
@@ -781,16 +797,11 @@ export class Simulation extends Game {
         const events = this.getEventManager();
         const mousePos = events.getMousePosition();
         
-        // Convert screen coords to world coords
-        const viewW = this.settings.screenWidth / this.zoomLevel;
-        const viewH = this.settings.screenHeight / this.zoomLevel;
-        let viewX = -this.cameraX / this.zoomLevel;
-        let viewY = -this.cameraY / this.zoomLevel;
-        viewX = Math.max(0, Math.min(this.settings.mapWidth - viewW, viewX));
-        viewY = Math.max(0, Math.min(this.settings.mapHeight - viewH, viewY));
-        
-        const worldX = viewX + (mousePos.x / this.zoomLevel);
-        const worldY = viewY + (mousePos.y / this.zoomLevel);
+        const { worldX, worldY } = this.camera3d.screenToWorld(
+          mousePos.x,
+          mousePos.y,
+          (x, y) => this.heightMap?.getSurfaceWorldZ(x, y) ?? 0
+        );
         
         if (e.shiftKey) {
           // Shift+Click: Add new squibble
@@ -859,101 +870,6 @@ export class Simulation extends Game {
     return this.zoomLevel;
   }
   
-  private drawHealthBar(x: number, y: number, radius: number, health: number, maxHealth: number, zoom: number): void {
-    const barWidth = 20 * zoom;
-    const barHeight = 3 * zoom;
-    const barX = x - barWidth / 2;
-    const barY = y - radius - 15 * zoom;
-    
-    // Background
-    this.renderer.drawRect(barX, barY, barWidth, barHeight, [100, 100, 100], 1.0);
-    
-    // Health fill
-    const healthPercentage = health / maxHealth;
-    const healthWidth = healthPercentage * barWidth;
-    if (healthWidth > 0) {
-      let color: [number, number, number];
-      const healthPercent = healthPercentage * 100; // Convert to 0-100 scale for color calculation
-      if (healthPercent > 50) {
-        // Green to yellow
-        const green = 255;
-        const red = Math.floor(255 * (1 - (healthPercent - 50) / 50));
-        color = [red, green, 0];
-      } else {
-        // Yellow to red
-        const red = 255;
-        const green = Math.floor(255 * (healthPercent / 50));
-        color = [red, green, 0];
-      }
-      this.renderer.drawRect(barX, barY, healthWidth, barHeight, color, 1.0);
-    }
-  }
-  
-  private drawStatusIcons(
-    x: number,
-    y: number,
-    radius: number,
-    squibble: any,
-    zoom: number
-  ): void {
-    const iconSize = 12 * zoom;
-    const iconSpacing = 2 * zoom;
-    // Position icons above health bar (health bar is at y - radius - 15 * zoom, so icons go above that)
-    const iconY = y - radius - 30 * zoom;
-    
-    // Collect all icons to display (order: love, hunger, thirst, fetus)
-    const icons: string[] = [];
-    
-    // Love icon (only when seeking mate, not when breeding - breeding has big heart)
-    if (squibble.seekingMate && !squibble.isBreeding) {
-      icons.push('love');
-    }
-    
-    // Hunger icon (when actively seeking food / eating — align with hungerThreshold 70)
-    if (squibble.hunger < 70.0 || squibble.isEating) {
-      icons.push('hunger');
-    }
-    
-    // Thirst icon (align with squibble thirstThreshold 70)
-    if (squibble.thirst < 70.0) {
-      icons.push('thirst');
-    }
-    
-    // Pregnant icon
-    if (squibble.isPregnant) {
-      icons.push('fetus');
-    }
-    
-    // Combat icon (sword)
-    if (squibble.isInCombat) {
-      icons.push('sword');
-    }
-    
-    // Health icon (show when below 50) - commented out since health.png doesn't exist
-    // if (squibble.health < 50) {
-    //   icons.push('health');
-    // }
-    
-    // Calculate total width to center icons
-    const totalWidth = icons.length * iconSize + (icons.length - 1) * iconSpacing;
-    let iconX = x - totalWidth / 2 + iconSize / 2;
-    
-    // Draw each icon
-    for (const iconName of icons) {
-      const texture = AssetLoader.getIconTexture(iconName);
-      if (texture) {
-        const sprite = new Sprite(texture);
-        sprite.width = iconSize;
-        sprite.height = iconSize;
-        sprite.anchor.set(0.5);
-        sprite.x = iconX;
-        sprite.y = iconY;
-        this.entityContainer.addChild(sprite);
-      }
-      iconX += iconSize + iconSpacing;
-    }
-  }
-  
   /**
    * Set callback for returning to title screen
    */
@@ -990,12 +906,4 @@ export class Simulation extends Game {
     }
   }
   
-  private drawHeart(x: number, y: number, size: number, color: [number, number, number]): void {
-    // Simple heart indicator - just a small filled circle with pink color
-    const graphics = new Graphics();
-    graphics.beginFill((color[0] << 16) | (color[1] << 8) | color[2], 0.8);
-    graphics.drawCircle(x, y, size * 0.4);
-    graphics.endFill();
-    this.entityContainer.addChild(graphics);
-  }
 }

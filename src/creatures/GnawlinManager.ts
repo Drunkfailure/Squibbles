@@ -4,6 +4,7 @@
 
 import { Gnawlin } from './Gnawlin';
 import { WaterMap } from '../terrain/WaterMap';
+import { HeightMap } from '../terrain/HeightMap';
 import { SquibbleManager } from './SquibbleManager';
 import { ParentageRecord } from '../genetics/Genetics';
 
@@ -144,11 +145,12 @@ export class GnawlinManager {
     screenHeight: number,
     squibbleManager?: SquibbleManager, // For finding prey (Squibbles)
     waterMap?: WaterMap,
-    getBiomeAt?: (x: number, y: number) => number
+    getBiomeAt?: (x: number, y: number) => number,
+    heightMap?: HeightMap
   ): void {
     // Update all gnawlins
     for (const gnawlin of this.gnawlins) {
-      gnawlin.update(dt, screenWidth, screenHeight, squibbleManager, waterMap, this, getBiomeAt);
+      gnawlin.update(dt, screenWidth, screenHeight, squibbleManager, waterMap, this, getBiomeAt, heightMap);
     }
     
     // Process breeding

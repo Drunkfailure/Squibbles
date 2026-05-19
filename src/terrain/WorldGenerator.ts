@@ -5,6 +5,10 @@
 
 import { Biome } from './Biome';
 import { WaterMap } from './WaterMap';
+import {
+  MIN_LAND_SURFACE_HEIGHT,
+  WATER_SURFACE_HEIGHT,
+} from '../render/ViewProjection';
 
 export interface TerrainSettings {
   biome_scale: number;
@@ -24,6 +28,8 @@ export interface TerrainSettings {
 export interface WorldData {
   biomeGrid: Uint8Array;
   waterMask: boolean[];
+  /** Per-tile elevation 0–1 (rivers/valleys low, peaks high). */
+  heightGrid: Float32Array;
   tileSize: number;
   rows: number;
   cols: number;
@@ -449,6 +455,11 @@ function pruneDesertAndExcessWater(grid: Uint8Array, rows: number, cols: number)
 /**
  * Wave Function Collapse algorithm for terrain generation
  */
+interface WFCResult {
+  biomeGrid: Uint8Array;
+  heightGrid: Float32Array;
+}
+
 async function generateWithWFC(
   rows: number,
   cols: number,
@@ -456,7 +467,7 @@ async function generateWithWFC(
   worldSeed: number,
   settings?: TerrainSettings,
   onProgress?: (progress: number, message: string) => void
-): Promise<Uint8Array> {
+): Promise<WFCResult> {
   /** Split streams so rivers / smoothing do not reshuffle unrelated noise. */
   const rngElev = createMulberry32(mix32(worldSeed, 0xa11));
   const rngMoist = createMulberry32(mix32(worldSeed, 0xa22));
@@ -999,8 +1010,130 @@ async function generateWithWFC(
     onProgress(95, 'Finalizing terrain...');
     await new Promise(resolve => setTimeout(resolve, 0));
   }
-  
-  return work;
+
+  const heightGrid = finalizeHeightGrid(elevation, work, rows, cols, worldSeed);
+  return { biomeGrid: work, heightGrid };
+}
+
+/**
+ * Minecraft-style height: multi-scale noise → land surface strictly above sea level (Y=0).
+ * Water tiles are always flat at WATER_SURFACE_HEIGHT (world Z 0).
+ */
+function finalizeHeightGrid(
+  elevation: Float32Array,
+  biomeGrid: Uint8Array,
+  rows: number,
+  cols: number,
+  worldSeed: number
+): Float32Array {
+  const rngRidge = createMulberry32(mix32(worldSeed, 0xa77));
+  const rngPeak = createMulberry32(mix32(worldSeed, 0xa88));
+  const rngDetail = createMulberry32(mix32(worldSeed, 0xa99));
+
+  const ridge = generateNoise(cols, rows, 2, 0.5, 2.2, rngRidge);
+  const peaks = generateNoise(cols, rows, 2, 0.45, 2.5, rngPeak);
+  const detail = generateNoise(cols, rows, 4, 0.52, 2.8, rngDetail);
+
+  const height = new Float32Array(rows * cols);
+  const landSamples: number[] = [];
+
+  const isWater = (idx: number) => biomeGrid[idx] === Biome.WATER;
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const idx = r * cols + c;
+      if (isWater(idx)) {
+        height[idx] = WATER_SURFACE_HEIGHT;
+        continue;
+      }
+
+      const continental = elevation[idx];
+      const erosion = ridge[idx];
+      const mountain = peaks[idx];
+      const fine = detail[idx];
+
+      let h =
+        continental * 0.48 +
+        erosion * 0.26 +
+        mountain * 0.16 +
+        fine * 0.1;
+
+      h = (h - 0.38) * 1.55;
+      h = h * h * (3 - 2 * h);
+
+      if (h > 0.55) h += (h - 0.55) * 0.35;
+      if (h > 0.75) h += (h - 0.75) * 0.5;
+
+      landSamples.push(h);
+      height[idx] = h;
+    }
+  }
+
+  if (landSamples.length > 0) {
+    let minL = landSamples[0];
+    let maxL = landSamples[0];
+    for (const v of landSamples) {
+      minL = Math.min(minL, v);
+      maxL = Math.max(maxL, v);
+    }
+    const span = Math.max(0.001, maxL - minL);
+    let si = 0;
+    const landTop = 1.0;
+    const landFloor = MIN_LAND_SURFACE_HEIGHT;
+
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const idx = r * cols + c;
+        if (isWater(idx)) continue;
+
+        const t = (landSamples[si++] - minL) / span;
+        const shaped = Math.pow(t, 0.68);
+        height[idx] = landFloor + shaped * (landTop - landFloor);
+
+        if (height[idx] > 0.65) {
+          height[idx] += (height[idx] - 0.65) * 0.22;
+        }
+        height[idx] = Math.max(landFloor, Math.min(landTop, height[idx]));
+      }
+    }
+  }
+
+  enforceShorelinesAboveSea(height, biomeGrid, rows, cols);
+  return height;
+}
+
+/** Beaches: land beside water sits at least one step above sea level (never below Y=0). */
+function enforceShorelinesAboveSea(
+  height: Float32Array,
+  biomeGrid: Uint8Array,
+  rows: number,
+  cols: number
+): void {
+  const beachMin = MIN_LAND_SURFACE_HEIGHT * 1.08;
+  const shoreMin = MIN_LAND_SURFACE_HEIGHT;
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const idx = r * cols + c;
+      if (biomeGrid[idx] === Biome.WATER) continue;
+
+      let touchesWater = false;
+      for (const [dr, dc] of [[-1, 0], [1, 0], [0, -1], [0, 1]] as const) {
+        const nr = r + dr;
+        const nc = c + dc;
+        if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
+        if (biomeGrid[nr * cols + nc] === Biome.WATER) {
+          touchesWater = true;
+          break;
+        }
+      }
+
+      if (touchesWater) {
+        height[idx] = Math.max(height[idx], beachMin);
+      }
+      height[idx] = Math.max(shoreMin, height[idx]);
+    }
+  }
 }
 
 /**
@@ -1363,7 +1496,7 @@ export async function generateWorld(
     onProgress(0, 'Preparing world generation...');
     await new Promise(resolve => setTimeout(resolve, 0));
   }
-  const biomeGrid = await generateWithWFC(rows, cols, biomeWeights, worldSeed, s, onProgress);
+  const { biomeGrid, heightGrid } = await generateWithWFC(rows, cols, biomeWeights, worldSeed, s, onProgress);
   
   // Generate water mask from biome grid (water is now part of biomes)
   const waterMask = new Array(rows * cols).fill(false);
@@ -1379,6 +1512,7 @@ export async function generateWorld(
   return {
     biomeGrid,
     waterMask,
+    heightGrid,
     tileSize,
     rows,
     cols,
